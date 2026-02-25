@@ -211,7 +211,7 @@ jobs:
     needs: setup
     runs-on: macos-14
     outputs:
-      artifact-url: ${{ steps.upload-ipa.outputs.artifact-url }}
+      artifact-url: ${{ steps.upload-ipa.outputs.artifact-url || steps.upload-xcarchive.outputs.artifact-url }}
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
@@ -259,7 +259,18 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ inputs.APP_VERSION }}" App/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ inputs.IOS_BUILD_NUMBER }}" App/Info.plist
 
+      - name: Check code signing availability
+        id: signing
+        run: |
+          if [[ -n "${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 }}" && -n "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" ]]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ iOS code signing secrets not configured. Building without signing."
+          fi
+
       - name: Install Apple certificate and provisioning profile
+        if: steps.signing.outputs.available == 'true'
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
@@ -284,7 +295,8 @@ jobs:
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
 
-      - name: Build iOS archive
+      - name: Build iOS archive (signed)
+        if: steps.signing.outputs.available == 'true'
         working-directory: ios/App
         run: |
           xcodebuild archive \
@@ -295,7 +307,19 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             -allowProvisioningUpdates
 
+      - name: Build iOS archive (unsigned)
+        if: steps.signing.outputs.available != 'true'
+        working-directory: ios/App
+        run: |
+          xcodebuild archive \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: Export IPA
+        if: steps.signing.outputs.available == 'true'
         run: |
           cat > $RUNNER_TEMP/ExportOptions.plist << 'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -316,6 +340,7 @@ jobs:
             -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist
 
       - name: Upload IPA artifact
+        if: steps.signing.outputs.available == 'true'
         id: upload-ipa
         uses: actions/upload-artifact@v4
         with:
@@ -323,14 +348,23 @@ jobs:
           path: ${{ runner.temp }}/export/*.ipa
           retention-days: 30
 
+      - name: Upload xcarchive artifact (unsigned)
+        if: steps.signing.outputs.available != 'true'
+        id: upload-xcarchive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release
+          path: ${{ runner.temp }}/App.xcarchive
+          retention-days: 30
+
       - name: Install Ruby and Fastlane
-        if: ${{ inputs.RELEASE_TARGET == 'testflight' }}
+        if: ${{ inputs.RELEASE_TARGET == 'testflight' && steps.signing.outputs.available == 'true' }}
         run: |
           gem install bundler
           cd ios && bundle install
 
       - name: Upload to TestFlight
-        if: ${{ inputs.RELEASE_TARGET == 'testflight' }}
+        if: ${{ inputs.RELEASE_TARGET == 'testflight' && steps.signing.outputs.available == 'true' }}
         working-directory: ios
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
