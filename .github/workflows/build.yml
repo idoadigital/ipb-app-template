@@ -173,14 +173,24 @@ jobs:
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
 
-      - name: Upload to Play Store
+      - name: Install Ruby and Fastlane
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) }}
         working-directory: android
         run: |
-          bundle exec fastlane supply \
-            --track "${{ inputs.RELEASE_TARGET == 'play_production' && 'production' || (inputs.RELEASE_TARGET == 'play_closed' && 'alpha' || 'internal') }}" \
-            --aab app/build/outputs/bundle/release/*.aab \
-            --json_key_data "${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}"
+          gem install bundler
+          bundle install
+
+      - name: Upload to Play Store
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) }}
+        working-directory: android
+        env:
+          GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
+          ANDROID_PACKAGE_NAME: ${{ inputs.ANDROID_PACKAGE_NAME }}
+        run: |
+          TRACK="internal"
+          if [[ "${{ inputs.RELEASE_TARGET }}" == "play_closed" ]]; then TRACK="alpha"; fi
+          if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
+          bundle exec fastlane upload_to_play_store track:$TRACK
 
   build-ios:
     needs: setup
@@ -277,14 +287,22 @@ jobs:
           path: ${{ runner.temp }}/export/*.ipa
           retention-days: 30
 
-      - name: Upload to TestFlight
+      - name: Install Ruby and Fastlane
         if: ${{ inputs.RELEASE_TARGET == 'testflight' }}
         run: |
-          xcrun altool --upload-app \
-            -f "$RUNNER_TEMP/export/*.ipa" \
-            -t ios \
-            --apiKey "${{ secrets.APP_STORE_API_KEY_ID }}" \
-            --apiIssuer "${{ secrets.APP_STORE_API_ISSUER_ID }}"
+          gem install bundler
+          cd ios && bundle install
+
+      - name: Upload to TestFlight
+        if: ${{ inputs.RELEASE_TARGET == 'testflight' }}
+        working-directory: ios
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          IOS_BUNDLE_ID: ${{ inputs.IOS_BUNDLE_ID }}
+          APP_NAME: ${{ inputs.APP_NAME }}
+        run: bundle exec fastlane upload_to_testflight_lane
 
   notify:
     needs: [build-android, build-ios]
