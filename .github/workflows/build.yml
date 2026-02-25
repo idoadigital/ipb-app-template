@@ -156,8 +156,17 @@ jobs:
 
       - name: Add and sync Capacitor Android project
         run: |
+          # Preserve Fastlane files, remove skeleton so cap add can create full project
+          if [ -d android ] && [ ! -f android/app/build.gradle ]; then
+            cp -r android/fastlane /tmp/android-fastlane 2>/dev/null || true
+            cp android/Gemfile /tmp/android-Gemfile 2>/dev/null || true
+            rm -rf android
+          fi
           npx cap add android || true
           npx cap sync android
+          # Restore Fastlane files
+          cp -r /tmp/android-fastlane android/fastlane 2>/dev/null || true
+          cp /tmp/android-Gemfile android/Gemfile 2>/dev/null || true
 
       - name: Set Android version
         working-directory: android
@@ -232,8 +241,17 @@ jobs:
 
       - name: Add and sync Capacitor iOS project
         run: |
+          # Preserve Fastlane files, remove skeleton so cap add can create full project
+          if [ -d ios ] && [ ! -f ios/App/Podfile ]; then
+            cp -r ios/fastlane /tmp/ios-fastlane 2>/dev/null || true
+            cp ios/Gemfile /tmp/ios-Gemfile 2>/dev/null || true
+            rm -rf ios
+          fi
           npx cap add ios || true
           npx cap sync ios
+          # Restore Fastlane files
+          cp -r /tmp/ios-fastlane ios/fastlane 2>/dev/null || true
+          cp /tmp/ios-Gemfile ios/Gemfile 2>/dev/null || true
 
       - name: Set iOS version
         working-directory: ios/App
