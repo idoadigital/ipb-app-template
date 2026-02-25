@@ -154,8 +154,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Sync Capacitor Android project
-        run: npx cap sync android
+      - name: Add and sync Capacitor Android project
+        run: |
+          npx cap add android || true
+          npx cap sync android
 
       - name: Set Android version
         working-directory: android
@@ -228,8 +230,10 @@ jobs:
       - name: Install CocoaPods
         run: sudo gem install cocoapods
 
-      - name: Sync Capacitor iOS project
-        run: npx cap sync ios
+      - name: Add and sync Capacitor iOS project
+        run: |
+          npx cap add ios || true
+          npx cap sync ios
 
       - name: Set iOS version
         working-directory: ios/App
@@ -326,25 +330,59 @@ jobs:
       - name: Determine build status
         id: status
         run: |
-          if [[ "${{ needs.build-android.result }}" == "success" && "${{ needs.build-ios.result }}" == "success" ]]; then
+          ANDROID_RESULT="${{ needs.build-android.result }}"
+          IOS_RESULT="${{ needs.build-ios.result }}"
+
+          if [[ "$ANDROID_RESULT" == "success" && "$IOS_RESULT" == "success" ]]; then
             echo "result=succeeded" >> $GITHUB_OUTPUT
-          elif [[ "${{ needs.build-android.result }}" == "skipped" && "${{ needs.build-ios.result }}" == "success" ]]; then
+            echo "error_message=" >> $GITHUB_OUTPUT
+          elif [[ "$ANDROID_RESULT" == "skipped" && "$IOS_RESULT" == "success" ]]; then
             echo "result=succeeded" >> $GITHUB_OUTPUT
-          elif [[ "${{ needs.build-android.result }}" == "success" && "${{ needs.build-ios.result }}" == "skipped" ]]; then
+            echo "error_message=" >> $GITHUB_OUTPUT
+          elif [[ "$ANDROID_RESULT" == "success" && "$IOS_RESULT" == "skipped" ]]; then
             echo "result=succeeded" >> $GITHUB_OUTPUT
+            echo "error_message=" >> $GITHUB_OUTPUT
           else
             echo "result=failed" >> $GITHUB_OUTPUT
+            # Build error message from failed jobs
+            ERRORS=""
+            if [[ "$ANDROID_RESULT" == "failure" ]]; then
+              ERRORS="Android build failed."
+            fi
+            if [[ "$IOS_RESULT" == "failure" ]]; then
+              if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
+              ERRORS="${ERRORS}iOS build failed."
+            fi
+            if [[ "$ANDROID_RESULT" == "cancelled" || "$IOS_RESULT" == "cancelled" ]]; then
+              if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
+              ERRORS="${ERRORS}Build was cancelled."
+            fi
+            if [[ -z "$ERRORS" ]]; then
+              ERRORS="Build failed. Check workflow logs for details."
+            fi
+            echo "error_message=${ERRORS}" >> $GITHUB_OUTPUT
           fi
 
       - name: Notify CI callback
         run: |
+          # Build JSON payload with jq to safely handle special characters
+          PAYLOAD=$(jq -n \
+            --arg build_id "${{ inputs.BUILD_JOB_ID }}" \
+            --arg status "${{ steps.status.outputs.result }}" \
+            --arg error_message "${{ steps.status.outputs.error_message }}" \
+            --arg artifact_android_url "${{ needs.build-android.outputs.artifact-url }}" \
+            --arg artifact_ios_url "${{ needs.build-ios.outputs.artifact-url }}" \
+            --arg workflow_run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{
+              build_id: $build_id,
+              status: $status,
+              error_message: $error_message,
+              artifact_android_url: $artifact_android_url,
+              artifact_ios_url: $artifact_ios_url,
+              workflow_run_url: $workflow_run_url,
+              logs_url: $workflow_run_url
+            }')
           curl -X POST "${CI_CALLBACK_URL}" \
             -H "Content-Type: application/json" \
             -H "x-ipb-ci-secret: ${IPB_CI_SECRET}" \
-            -d '{
-              "build_id": "${{ inputs.BUILD_JOB_ID }}",
-              "status": "${{ steps.status.outputs.result }}",
-              "artifact_android_url": "${{ needs.build-android.outputs.artifact-url }}",
-              "artifact_ios_url": "${{ needs.build-ios.outputs.artifact-url }}",
-              "workflow_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }'
+            -d "$PAYLOAD"
