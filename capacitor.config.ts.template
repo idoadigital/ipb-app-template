@@ -1,0 +1,27 @@
+import type { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: '${ANDROID_PACKAGE_NAME}',
+  appName: '${APP_NAME}',
+  webDir: 'dist',
+  server: {
+    url: '${START_URL}',
+    cleartext: false,
+  },
+  plugins: {
+    SplashScreen: {
+      launchShowDuration: 2000,
+      backgroundColor: '${PRIMARY_COLOR}',
+    },
+  },
+  ios: {
+    scheme: '${APP_NAME}',
+  },
+  android: {
+    buildOptions: {
+      keystorePath: undefined,
+    },
+  },
+};
+
+export default config;

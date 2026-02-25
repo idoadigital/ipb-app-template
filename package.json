@@ -1,0 +1,25 @@
+{
+  "name": "ipb-app-template",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Inc People Builder - Capacitor app template for wrapping web apps as native mobile apps",
+  "scripts": {
+    "generate-config": "node scripts/generate-config.js",
+    "cap:sync": "npx cap sync",
+    "cap:sync:android": "npx cap sync android",
+    "cap:sync:ios": "npx cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/app": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor/splash-screen": "^6.0.0",
+    "@capacitor/status-bar": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "typescript": "^5.4.0"
+  }
+}
