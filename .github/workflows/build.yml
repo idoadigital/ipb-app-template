@@ -231,6 +231,7 @@ jobs:
         working-directory: android
         run: |
           sudo gem install bundler
+          bundle config set --local path 'vendor/bundle'
           bundle install
 
       - name: Upload to Play Store
