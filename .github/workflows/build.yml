@@ -229,7 +229,7 @@ jobs:
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && steps.android-signing.outputs.available == 'true' }}
         working-directory: android
         run: |
-          gem install bundler
+          sudo gem install bundler
           bundle install
 
       - name: Upload to Play Store
