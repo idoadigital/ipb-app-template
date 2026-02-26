@@ -131,6 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       artifact-url: ${{ steps.upload-aab.outputs.artifact-url || steps.upload-apk.outputs.artifact-url }}
+      store-uploaded: ${{ steps.play-upload-status.outputs.uploaded }}
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
@@ -233,6 +234,7 @@ jobs:
           bundle install
 
       - name: Upload to Play Store
+        id: play-upload
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && steps.android-signing.outputs.available == 'true' }}
         working-directory: android
         env:
@@ -244,11 +246,22 @@ jobs:
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
           bundle exec fastlane upload_to_play_store track:$TRACK
 
+      - name: Set Play Store upload status
+        id: play-upload-status
+        if: always()
+        run: |
+          if [[ "${{ steps.play-upload.outcome }}" == "success" ]]; then
+            echo "uploaded=true" >> $GITHUB_OUTPUT
+          else
+            echo "uploaded=false" >> $GITHUB_OUTPUT
+          fi
+
   build-ios:
     needs: setup
     runs-on: macos-14
     outputs:
       artifact-url: ${{ steps.upload-ipa.outputs.artifact-url || steps.upload-xcarchive.outputs.artifact-url }}
+      store-uploaded: ${{ steps.testflight-upload-status.outputs.uploaded }}
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
@@ -401,6 +414,7 @@ jobs:
           cd ios && bundle install
 
       - name: Upload to TestFlight
+        id: testflight-upload
         if: ${{ inputs.RELEASE_TARGET == 'testflight' && steps.signing.outputs.available == 'true' }}
         working-directory: ios
         env:
@@ -410,6 +424,16 @@ jobs:
           IOS_BUNDLE_ID: ${{ inputs.IOS_BUNDLE_ID }}
           APP_NAME: ${{ inputs.APP_NAME }}
         run: bundle exec fastlane upload_to_testflight_lane
+
+      - name: Set TestFlight upload status
+        id: testflight-upload-status
+        if: always()
+        run: |
+          if [[ "${{ steps.testflight-upload.outcome }}" == "success" ]]; then
+            echo "uploaded=true" >> $GITHUB_OUTPUT
+          else
+            echo "uploaded=false" >> $GITHUB_OUTPUT
+          fi
 
   notify:
     needs: [build-android, build-ios]
@@ -452,6 +476,24 @@ jobs:
             echo "error_message=${ERRORS}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Determine release status
+        id: release
+        run: |
+          RELEASE_TARGET="${{ inputs.RELEASE_TARGET }}"
+          ANDROID_UPLOADED="${{ needs.build-android.outputs.store-uploaded }}"
+          IOS_UPLOADED="${{ needs.build-ios.outputs.store-uploaded }}"
+
+          if [[ "$RELEASE_TARGET" == "none" || -z "$RELEASE_TARGET" ]]; then
+            echo "status=not_requested" >> $GITHUB_OUTPUT
+            echo "track=" >> $GITHUB_OUTPUT
+          elif [[ "$ANDROID_UPLOADED" == "true" || "$IOS_UPLOADED" == "true" ]]; then
+            echo "status=uploaded_to_store" >> $GITHUB_OUTPUT
+            echo "track=$RELEASE_TARGET" >> $GITHUB_OUTPUT
+          else
+            echo "status=upload_skipped" >> $GITHUB_OUTPUT
+            echo "track=$RELEASE_TARGET" >> $GITHUB_OUTPUT
+          fi
+
       - name: Notify CI callback
         run: |
           # Build JSON payload with jq to safely handle special characters
@@ -462,6 +504,8 @@ jobs:
             --arg artifact_android_url "${{ needs.build-android.outputs.artifact-url }}" \
             --arg artifact_ios_url "${{ needs.build-ios.outputs.artifact-url }}" \
             --arg workflow_run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg release_status "${{ steps.release.outputs.status }}" \
+            --arg released_to_track "${{ steps.release.outputs.track }}" \
             '{
               build_id: $build_id,
               status: $status,
@@ -469,7 +513,9 @@ jobs:
               artifact_android_url: $artifact_android_url,
               artifact_ios_url: $artifact_ios_url,
               workflow_run_url: $workflow_run_url,
-              logs_url: $workflow_run_url
+              logs_url: $workflow_run_url,
+              release_status: $release_status,
+              released_to_track: $released_to_track
             }')
           curl -X POST "${CI_CALLBACK_URL}" \
             -H "Content-Type: application/json" \
