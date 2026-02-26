@@ -72,6 +72,7 @@ env:
 jobs:
   setup:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -106,12 +107,22 @@ jobs:
         run: |
           mkdir -p assets
           curl -fSL -o assets/icon.png "${{ inputs.ICON_ASSET_URL }}"
+          FILE_SIZE=$(stat -c%s "assets/icon.png" 2>/dev/null || stat -f%z "assets/icon.png" 2>/dev/null || echo "0")
+          if [ "$FILE_SIZE" -lt 100 ]; then
+            echo "::error::Downloaded icon is too small (${FILE_SIZE} bytes) — URL may be invalid."
+            exit 1
+          fi
 
       - name: Download splash asset
         if: ${{ inputs.SPLASH_ASSET_URL != '' }}
         run: |
           mkdir -p assets
           curl -fSL -o assets/splash.png "${{ inputs.SPLASH_ASSET_URL }}"
+          FILE_SIZE=$(stat -c%s "assets/splash.png" 2>/dev/null || stat -f%z "assets/splash.png" 2>/dev/null || echo "0")
+          if [ "$FILE_SIZE" -lt 100 ]; then
+            echo "::error::Downloaded splash is too small (${FILE_SIZE} bytes) — URL may be invalid."
+            exit 1
+          fi
 
       - name: Generate icon and splash resources
         if: ${{ inputs.ICON_ASSET_URL != '' || inputs.SPLASH_ASSET_URL != '' }}
@@ -129,9 +140,12 @@ jobs:
   build-android:
     needs: setup
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
-      artifact-url: ${{ steps.upload-aab.outputs.artifact-url || steps.upload-apk.outputs.artifact-url }}
+      artifact-id: ${{ steps.upload-aab.outputs.artifact-id || steps.upload-apk.outputs.artifact-id }}
       store-uploaded: ${{ steps.play-upload-status.outputs.uploaded }}
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
@@ -151,19 +165,26 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: 'gradle'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Add and sync Capacitor Android project
         run: |
-          # Preserve Fastlane files, remove skeleton so cap add can create full project
+          # If android dir exists but is incomplete (only Fastlane skeleton), fix it
           if [ -d android ] && [ ! -f android/app/build.gradle ]; then
+            echo "Incomplete Android project detected, preserving Fastlane files..."
             cp -r android/fastlane /tmp/android-fastlane 2>/dev/null || true
             cp android/Gemfile /tmp/android-Gemfile 2>/dev/null || true
             rm -rf android
           fi
-          npx cap add android || true
+          # Add android platform if not present
+          if [ ! -f android/app/build.gradle ]; then
+            npx cap add android
+          else
+            echo "Android platform already exists, skipping cap add."
+          fi
           npx cap sync android
           # Restore Fastlane files
           cp -r /tmp/android-fastlane android/fastlane 2>/dev/null || true
@@ -174,42 +195,40 @@ jobs:
         run: |
           sed -i "s/versionName \".*\"/versionName \"${{ inputs.APP_VERSION }}\"/" app/build.gradle
           sed -i "s/versionCode .*/versionCode ${{ inputs.ANDROID_VERSION_CODE }}/" app/build.gradle
-
-      - name: Check Android signing availability
-        id: android-signing
-        run: |
-          if [[ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]]; then
-            echo "available=true" >> $GITHUB_OUTPUT
-          else
-            echo "available=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Android keystore not configured. Building unsigned APK only."
+          # Verify substitutions applied
+          if ! grep -q 'versionName "${{ inputs.APP_VERSION }}"' app/build.gradle; then
+            echo "::warning::versionName substitution may not have applied"
+          fi
+          if ! grep -q "versionCode ${{ inputs.ANDROID_VERSION_CODE }}" app/build.gradle; then
+            echo "::warning::versionCode substitution may not have applied"
           fi
 
       - name: Decode Android keystore
-        if: steps.android-signing.outputs.available == 'true'
-        run: |
-          echo -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > $RUNNER_TEMP/release.jks
+        if: env.HAS_KEYSTORE == 'true'
+        run: echo -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > $RUNNER_TEMP/release.jks
 
       - name: Build signed AAB
-        if: steps.android-signing.outputs.available == 'true'
+        if: env.HAS_KEYSTORE == 'true'
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew bundleRelease \
+          ./gradlew bundleRelease --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx4g" \
             -Pandroid.injected.signing.store.file=$RUNNER_TEMP/release.jks \
             -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Build unsigned APK
-        if: steps.android-signing.outputs.available != 'true'
+        if: env.HAS_KEYSTORE != 'true'
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx4g"
 
       - name: Upload AAB artifact
-        if: steps.android-signing.outputs.available == 'true'
+        if: env.HAS_KEYSTORE == 'true'
         id: upload-aab
         uses: actions/upload-artifact@v4
         with:
@@ -218,7 +237,7 @@ jobs:
           retention-days: 30
 
       - name: Upload APK artifact
-        if: steps.android-signing.outputs.available != 'true'
+        if: env.HAS_KEYSTORE != 'true'
         id: upload-apk
         uses: actions/upload-artifact@v4
         with:
@@ -227,7 +246,7 @@ jobs:
           retention-days: 30
 
       - name: Install Ruby and Fastlane
-        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && steps.android-signing.outputs.available == 'true' }}
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
         working-directory: android
         run: |
           sudo gem install bundler
@@ -236,7 +255,7 @@ jobs:
 
       - name: Upload to Play Store
         id: play-upload
-        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && steps.android-signing.outputs.available == 'true' }}
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
         working-directory: android
         env:
           GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
@@ -245,7 +264,7 @@ jobs:
           TRACK="internal"
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_closed" ]]; then TRACK="alpha"; fi
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
-          bundle exec fastlane upload_to_play_store track:$TRACK
+          bundle exec fastlane android upload_to_play_store track:$TRACK
 
       - name: Set Play Store upload status
         id: play-upload-status
@@ -259,10 +278,13 @@ jobs:
 
   build-ios:
     needs: setup
-    runs-on: macos-14
+    runs-on: macos-15
+    timeout-minutes: 45
     outputs:
-      artifact-url: ${{ steps.upload-ipa.outputs.artifact-url || steps.upload-xcarchive.outputs.artifact-url }}
+      artifact-id: ${{ steps.upload-ipa.outputs.artifact-id || steps.upload-xcarchive.outputs.artifact-id }}
       store-uploaded: ${{ steps.testflight-upload-status.outputs.uploaded }}
+    env:
+      HAS_IOS_SIGNING: ${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
@@ -278,27 +300,28 @@ jobs:
         run: npm install --ignore-scripts
 
       - name: Select Xcode version
-        run: |
-          # Use latest available Xcode on the runner
-          XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
-          if [ -n "$XCODE_PATH" ]; then
-            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
-            echo "Selected Xcode: $XCODE_PATH"
-          fi
-          xcodebuild -version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16'
 
       - name: Install CocoaPods
         run: sudo gem install cocoapods
 
       - name: Add and sync Capacitor iOS project
         run: |
-          # Preserve Fastlane files, remove skeleton so cap add can create full project
+          # If ios dir exists but is incomplete (only Fastlane skeleton), fix it
           if [ -d ios ] && [ ! -f ios/App/Podfile ]; then
+            echo "Incomplete iOS project detected, preserving Fastlane files..."
             cp -r ios/fastlane /tmp/ios-fastlane 2>/dev/null || true
             cp ios/Gemfile /tmp/ios-Gemfile 2>/dev/null || true
             rm -rf ios
           fi
-          npx cap add ios || true
+          # Add iOS platform if not present
+          if [ ! -f ios/App/Podfile ]; then
+            npx cap add ios
+          else
+            echo "iOS platform already exists, skipping cap add."
+          fi
           npx cap sync ios
           # Restore Fastlane files
           cp -r /tmp/ios-fastlane ios/fastlane 2>/dev/null || true
@@ -310,18 +333,8 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ inputs.APP_VERSION }}" App/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ inputs.IOS_BUILD_NUMBER }}" App/Info.plist
 
-      - name: Check code signing availability
-        id: signing
-        run: |
-          if [[ -n "${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 }}" && -n "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" ]]; then
-            echo "available=true" >> $GITHUB_OUTPUT
-          else
-            echo "available=false" >> $GITHUB_OUTPUT
-            echo "⚠️ iOS code signing secrets not configured. Building without signing."
-          fi
-
       - name: Install Apple certificate and provisioning profile
-        if: steps.signing.outputs.available == 'true'
+        if: env.HAS_IOS_SIGNING == 'true'
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
@@ -335,19 +348,22 @@ jobs:
           echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
           echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
 
+          # Create and configure temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
 
+          # Import certificate
           security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
+          security list-keychains -d user -s $KEYCHAIN_PATH
 
+          # Install provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Build iOS archive (signed)
-        if: steps.signing.outputs.available == 'true'
+        if: env.HAS_IOS_SIGNING == 'true'
         working-directory: ios/App
         run: |
           xcodebuild archive \
@@ -355,11 +371,11 @@ jobs:
             -scheme App \
             -archivePath $RUNNER_TEMP/App.xcarchive \
             -configuration Release \
-            CODE_SIGN_STYLE=Manual \
+            -destination 'generic/platform=iOS' \
             -allowProvisioningUpdates
 
       - name: Build iOS archive (unsigned)
-        if: steps.signing.outputs.available != 'true'
+        if: env.HAS_IOS_SIGNING != 'true'
         working-directory: ios/App
         run: |
           xcodebuild archive \
@@ -367,10 +383,13 @@ jobs:
             -scheme App \
             -archivePath $RUNNER_TEMP/App.xcarchive \
             -configuration Release \
-            CODE_SIGNING_ALLOWED=NO
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
 
       - name: Export IPA
-        if: steps.signing.outputs.available == 'true'
+        if: env.HAS_IOS_SIGNING == 'true'
         run: |
           cat > $RUNNER_TEMP/ExportOptions.plist << 'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -378,9 +397,13 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>method</key>
-            <string>app-store</string>
+            <string>app-store-connect</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
             <key>uploadSymbols</key>
             <true/>
+            <key>destination</key>
+            <string>export</string>
           </dict>
           </plist>
           PLIST
@@ -388,19 +411,26 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath $RUNNER_TEMP/App.xcarchive \
             -exportPath $RUNNER_TEMP/export \
-            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
+            -allowProvisioningUpdates
+
+          # Copy IPA to location Fastlane expects
+          mkdir -p ios/build
+          cp $RUNNER_TEMP/export/*.ipa ios/build/app.ipa
+          echo "IPA exported successfully:"
+          ls -la ios/build/
 
       - name: Upload IPA artifact
-        if: steps.signing.outputs.available == 'true'
+        if: env.HAS_IOS_SIGNING == 'true'
         id: upload-ipa
         uses: actions/upload-artifact@v4
         with:
           name: ios-release
-          path: ${{ runner.temp }}/export/*.ipa
+          path: ios/build/app.ipa
           retention-days: 30
 
       - name: Upload xcarchive artifact (unsigned)
-        if: steps.signing.outputs.available != 'true'
+        if: env.HAS_IOS_SIGNING != 'true'
         id: upload-xcarchive
         uses: actions/upload-artifact@v4
         with:
@@ -409,14 +439,16 @@ jobs:
           retention-days: 30
 
       - name: Install Ruby and Fastlane
-        if: ${{ inputs.RELEASE_TARGET == 'testflight' && steps.signing.outputs.available == 'true' }}
+        if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
+        working-directory: ios
         run: |
-          gem install bundler
-          cd ios && bundle install
+          sudo gem install bundler
+          bundle config set --local path 'vendor/bundle'
+          bundle install
 
       - name: Upload to TestFlight
         id: testflight-upload
-        if: ${{ inputs.RELEASE_TARGET == 'testflight' && steps.signing.outputs.available == 'true' }}
+        if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
         working-directory: ios
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -424,7 +456,7 @@ jobs:
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
           IOS_BUNDLE_ID: ${{ inputs.IOS_BUNDLE_ID }}
           APP_NAME: ${{ inputs.APP_NAME }}
-        run: bundle exec fastlane upload_to_testflight_lane
+        run: bundle exec fastlane ios upload_to_testflight_lane
 
       - name: Set TestFlight upload status
         id: testflight-upload-status
@@ -436,10 +468,15 @@ jobs:
             echo "uploaded=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
+
   notify:
     needs: [build-android, build-ios]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Determine build status
         id: status
@@ -458,7 +495,6 @@ jobs:
             echo "error_message=" >> $GITHUB_OUTPUT
           else
             echo "result=failed" >> $GITHUB_OUTPUT
-            # Build error message from failed jobs
             ERRORS=""
             if [[ "$ANDROID_RESULT" == "failure" ]]; then
               ERRORS="Android build failed."
@@ -497,14 +533,28 @@ jobs:
 
       - name: Notify CI callback
         run: |
-          # Build JSON payload with jq to safely handle special characters
+          # Construct artifact download URLs from artifact IDs
+          ANDROID_ARTIFACT_ID="${{ needs.build-android.outputs.artifact-id }}"
+          IOS_ARTIFACT_ID="${{ needs.build-ios.outputs.artifact-id }}"
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+
+          ANDROID_URL=""
+          if [[ -n "$ANDROID_ARTIFACT_ID" ]]; then
+            ANDROID_URL="${REPO_URL}/actions/runs/${{ github.run_id }}/artifacts/${ANDROID_ARTIFACT_ID}"
+          fi
+
+          IOS_URL=""
+          if [[ -n "$IOS_ARTIFACT_ID" ]]; then
+            IOS_URL="${REPO_URL}/actions/runs/${{ github.run_id }}/artifacts/${IOS_ARTIFACT_ID}"
+          fi
+
           PAYLOAD=$(jq -n \
             --arg build_id "${{ inputs.BUILD_JOB_ID }}" \
             --arg status "${{ steps.status.outputs.result }}" \
             --arg error_message "${{ steps.status.outputs.error_message }}" \
-            --arg artifact_android_url "${{ needs.build-android.outputs.artifact-url }}" \
-            --arg artifact_ios_url "${{ needs.build-ios.outputs.artifact-url }}" \
-            --arg workflow_run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg artifact_android_url "$ANDROID_URL" \
+            --arg artifact_ios_url "$IOS_URL" \
+            --arg workflow_run_url "${REPO_URL}/actions/runs/${{ github.run_id }}" \
             --arg release_status "${{ steps.release.outputs.status }}" \
             --arg released_to_track "${{ steps.release.outputs.track }}" \
             '{
@@ -518,7 +568,16 @@ jobs:
               release_status: $release_status,
               released_to_track: $released_to_track
             }')
+
+          echo "Sending callback to CI..."
           curl -X POST "${CI_CALLBACK_URL}" \
             -H "Content-Type: application/json" \
             -H "x-ipb-ci-secret: ${IPB_CI_SECRET}" \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --fail-with-body \
+            --max-time 30 \
             -d "$PAYLOAD"
+          echo ""
+          echo "Callback sent successfully."
