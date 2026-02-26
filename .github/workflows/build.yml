@@ -130,7 +130,7 @@ jobs:
     needs: setup
     runs-on: ubuntu-latest
     outputs:
-      artifact-url: ${{ steps.upload-apk.outputs.artifact-url }}
+      artifact-url: ${{ steps.upload-aab.outputs.artifact-url || steps.upload-apk.outputs.artifact-url }}
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
@@ -174,13 +174,50 @@ jobs:
           sed -i "s/versionName \".*\"/versionName \"${{ inputs.APP_VERSION }}\"/" app/build.gradle
           sed -i "s/versionCode .*/versionCode ${{ inputs.ANDROID_VERSION_CODE }}/" app/build.gradle
 
-      - name: Build Android release
+      - name: Check Android signing availability
+        id: android-signing
+        run: |
+          if [[ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Android keystore not configured. Building unsigned APK only."
+          fi
+
+      - name: Decode Android keystore
+        if: steps.android-signing.outputs.available == 'true'
+        run: |
+          echo -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > $RUNNER_TEMP/release.jks
+
+      - name: Build signed AAB
+        if: steps.android-signing.outputs.available == 'true'
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=$RUNNER_TEMP/release.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Build unsigned APK
+        if: steps.android-signing.outputs.available != 'true'
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
 
+      - name: Upload AAB artifact
+        if: steps.android-signing.outputs.available == 'true'
+        id: upload-aab
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: android/app/build/outputs/bundle/release/*.aab
+          retention-days: 30
+
       - name: Upload APK artifact
+        if: steps.android-signing.outputs.available != 'true'
         id: upload-apk
         uses: actions/upload-artifact@v4
         with:
@@ -189,14 +226,14 @@ jobs:
           retention-days: 30
 
       - name: Install Ruby and Fastlane
-        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) }}
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && steps.android-signing.outputs.available == 'true' }}
         working-directory: android
         run: |
           gem install bundler
           bundle install
 
       - name: Upload to Play Store
-        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) }}
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && steps.android-signing.outputs.available == 'true' }}
         working-directory: android
         env:
           GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
