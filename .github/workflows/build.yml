@@ -532,8 +532,11 @@ jobs:
         run: |
           sudo gem install bundler
           bundle config set --local path 'vendor/bundle'
+          rm -rf vendor/bundle
           rm -f Gemfile.lock
+          bundle update colored2
           bundle install
+          bundle exec fastlane --version
 
       - name: Upload to TestFlight
         id: testflight-upload
