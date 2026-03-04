@@ -274,7 +274,7 @@ jobs:
         working-directory: android
         run: |
           BUNDLER_VERSION=2.5.22
-          sudo gem install bundler -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
+          sudo gem install bundler -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
           rm -rf vendor/bundle
           rm -f Gemfile.lock
           bundle _${BUNDLER_VERSION}_ config set --local path 'vendor/bundle'
@@ -423,9 +423,44 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
         run: |
-          mkdir -p ~/private_keys
-          printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > $HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          KEY_DIR="$HOME/private_keys"
+          KEY_FILE="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          TMP_DECODED="$KEY_FILE.decoded"
+          TMP_NORMALIZED="$KEY_FILE.normalized"
+          mkdir -p "$KEY_DIR"
+
+          if printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > "$TMP_DECODED" 2>/dev/null || \
+             printf '%s' "$ASC_KEY_CONTENT" | base64 -D > "$TMP_DECODED" 2>/dev/null || \
+             printf '%s' "$ASC_KEY_CONTENT" | base64 -d > "$TMP_DECODED" 2>/dev/null; then
+            if grep -q "BEGIN PRIVATE KEY" "$TMP_DECODED"; then
+              cp "$TMP_DECODED" "$KEY_FILE"
+            fi
+          fi
+
+          if [ ! -s "$KEY_FILE" ]; then
+            printf '%s' "$ASC_KEY_CONTENT" > "$KEY_FILE"
+          fi
+
+          perl -0777 -pe 's/\r//g; s/\\n/\n/g' "$KEY_FILE" > "$TMP_NORMALIZED"
+          mv "$TMP_NORMALIZED" "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
           echo "ASC API key file created for key ID: $ASC_KEY_ID"
+          ls -la "$KEY_DIR/"
+
+          if [ ! -s "$KEY_FILE" ]; then
+            echo "::error::AuthKey file is empty. Check ASC_KEY_CONTENT secret."
+            exit 1
+          fi
+
+          if ! grep -q "BEGIN PRIVATE KEY" "$KEY_FILE" || ! grep -q "END PRIVATE KEY" "$KEY_FILE"; then
+            echo "::error::AuthKey file is not a valid .p8 PEM."
+            head -1 "$KEY_FILE" | cat -v
+            exit 1
+          fi
+
+          echo "Key file validated: $(wc -c < "$KEY_FILE") bytes"
+          head -1 "$KEY_FILE"
 
       - name: Build iOS archive (signed)
         if: env.HAS_IOS_SIGNING == 'true'
@@ -527,7 +562,7 @@ jobs:
         working-directory: ios
         run: |
           BUNDLER_VERSION=2.5.22
-          sudo gem install bundler -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
+          sudo gem install bundler -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
           rm -rf vendor/bundle
           rm -f Gemfile.lock
           bundle _${BUNDLER_VERSION}_ config set --local path 'vendor/bundle'
