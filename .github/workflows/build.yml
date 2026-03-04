@@ -274,7 +274,7 @@ jobs:
         working-directory: android
         run: |
           BUNDLER_VERSION=2.5.22
-          sudo gem install bundler -v "$BUNDLER_VERSION" --no-document
+          sudo gem install bundler -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
           rm -rf vendor/bundle
           rm -f Gemfile.lock
           bundle _${BUNDLER_VERSION}_ config set --local path 'vendor/bundle'
@@ -424,7 +424,7 @@ jobs:
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
         run: |
           mkdir -p ~/private_keys
-          echo -n "$ASC_KEY_CONTENT" | base64 --decode > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          echo -n "$ASC_KEY_CONTENT" | base64 --decode > $HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8
           echo "ASC API key file created for key ID: $ASC_KEY_ID"
 
       - name: Build iOS archive (signed)
@@ -442,7 +442,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGN_STYLE=Automatic \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyPath $HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -allowProvisioningUpdates
@@ -494,7 +494,7 @@ jobs:
             -archivePath $RUNNER_TEMP/App.xcarchive \
             -exportPath $RUNNER_TEMP/export \
             -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
-            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyPath $HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -allowProvisioningUpdates
@@ -527,7 +527,7 @@ jobs:
         working-directory: ios
         run: |
           BUNDLER_VERSION=2.5.22
-          sudo gem install bundler -v "$BUNDLER_VERSION" --no-document
+          sudo gem install bundler -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
           rm -rf vendor/bundle
           rm -f Gemfile.lock
           bundle _${BUNDLER_VERSION}_ config set --local path 'vendor/bundle'
