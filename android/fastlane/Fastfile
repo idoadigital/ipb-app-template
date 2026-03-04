@@ -16,8 +16,8 @@ platform :android do
     )
   end
 
-  desc "Upload to Google Play internal track"
-  lane :upload_to_play_store do |options|
+  desc "Upload to Google Play"
+  lane :upload_aab_to_play_store do |options|
     track = options[:track] || "internal"
 
     upload_to_play_store(
