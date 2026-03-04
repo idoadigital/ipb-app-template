@@ -435,6 +435,17 @@ jobs:
           echo "PROFILE_UUID=$PROFILE_UUID" >> $GITHUB_ENV
           echo "DEVELOPMENT_TEAM=$TEAM_ID" >> $GITHUB_ENV
 
+      - name: Detect signing identity
+        if: env.HAS_IOS_SIGNING == 'true'
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning $RUNNER_TEMP/app-signing.keychain-db | grep -oE '"[^"]+"' | head -1 | tr -d '"')
+          echo "Detected signing identity: $IDENTITY"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No valid codesigning identity found in keychain"
+            exit 1
+          fi
+          echo "CODE_SIGN_IDENTITY=$IDENTITY" >> $GITHUB_ENV
+
       - name: Build iOS archive (signed)
         if: env.HAS_IOS_SIGNING == 'true'
         working-directory: ios/App
@@ -447,6 +458,8 @@ jobs:
             -destination 'generic/platform=iOS' \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
             PROVISIONING_PROFILE="$PROFILE_UUID" \
             -allowProvisioningUpdates
 
