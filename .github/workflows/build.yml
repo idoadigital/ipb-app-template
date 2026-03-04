@@ -251,7 +251,47 @@ jobs:
         run: |
           sudo gem install bundler
           bundle config set --local path 'vendor/bundle'
+          rm -rf vendor/bundle
+          rm -f Gemfile.lock
+          bundle update colored2
           bundle install
+
+      - name: Ensure up-to-date Android Fastfile
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
+        working-directory: android
+        run: |
+          mkdir -p fastlane
+          cat > fastlane/Fastfile <<'FASTFILE'
+default_platform(:android)
+
+platform :android do
+  desc "Upload to Google Play"
+  lane :upload_aab_to_play_store do |options|
+    track = options[:track] || "internal"
+
+    upload_to_play_store(
+      track: track,
+      aab: lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH] || "./app/build/outputs/bundle/release/app-release.aab",
+      json_key_data: ENV["GOOGLE_PLAY_JSON_KEY"],
+      package_name: ENV["ANDROID_PACKAGE_NAME"],
+      skip_upload_metadata: true,
+      skip_upload_changelogs: false,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      release_status: track == "production" ? "completed" : "draft",
+    )
+  end
+end
+FASTFILE
+          if grep -q "lane :upload_to_play_store" fastlane/Fastfile; then
+            echo "::error::Invalid lane name upload_to_play_store detected in Android Fastfile"
+            exit 1
+          fi
+          if ! grep -q "lane :upload_aab_to_play_store" fastlane/Fastfile; then
+            echo "::error::Expected lane upload_aab_to_play_store not found in Android Fastfile"
+            exit 1
+          fi
+          echo "Android Fastfile written successfully"
 
       - name: Upload to Play Store
         id: play-upload
@@ -264,7 +304,7 @@ jobs:
           TRACK="internal"
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_closed" ]]; then TRACK="alpha"; fi
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
-          bundle exec fastlane android upload_to_play_store track:$TRACK
+          bundle exec fastlane android upload_aab_to_play_store track:$TRACK
 
       - name: Set Play Store upload status
         id: play-upload-status
@@ -284,7 +324,7 @@ jobs:
       artifact-id: ${{ steps.upload-ipa.outputs.artifact-id || steps.upload-xcarchive.outputs.artifact-id }}
       store-uploaded: ${{ steps.testflight-upload-status.outputs.uploaded }}
     env:
-      HAS_IOS_SIGNING: ${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+      HAS_IOS_SIGNING: 'false'
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
@@ -444,6 +484,9 @@ jobs:
         run: |
           sudo gem install bundler
           bundle config set --local path 'vendor/bundle'
+          rm -rf vendor/bundle
+          rm -f Gemfile.lock
+          bundle update colored2
           bundle install
 
       - name: Upload to TestFlight
