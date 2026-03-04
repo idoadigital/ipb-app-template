@@ -273,14 +273,14 @@ jobs:
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
         working-directory: android
         run: |
-          sudo gem install bundler
-          bundle config set --local path 'vendor/bundle'
+          sudo gem install bundler -v "2.5.22" --no-document
+          bundle _2.5.22_ config set --local path 'vendor/bundle'
           rm -rf vendor/bundle
           rm -f Gemfile.lock
-          bundle update colored2
-          bundle install
-          bundle exec ruby -e "require 'rubygems'; puts \"colored2=#{Gem::Specification.find_by_name('colored2').version}\""
-          bundle exec fastlane --version
+          bundle _2.5.22_ update colored2
+          bundle _2.5.22_ install --jobs 4 --retry 3
+          bundle _2.5.22_ exec ruby -e "require 'rubygems'; puts \"colored2=#{Gem::Specification.find_by_name('colored2').version}\""
+          bundle _2.5.22_ exec fastlane --version
 
       - name: Verify Android Fastfile exists
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
@@ -307,7 +307,7 @@ jobs:
           TRACK="internal"
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_closed" ]]; then TRACK="alpha"; fi
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
-          bundle exec fastlane android upload_aab_to_play_store track:$TRACK
+          bundle _2.5.22_ exec fastlane android upload_aab_to_play_store track:$TRACK
 
       - name: Set Play Store upload status
         id: play-upload-status
@@ -543,13 +543,13 @@ jobs:
         if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
         working-directory: ios
         run: |
-          sudo gem install bundler
-          bundle config set --local path 'vendor/bundle'
+          sudo gem install bundler -v "2.5.22" --no-document
+          bundle _2.5.22_ config set --local path 'vendor/bundle'
           rm -rf vendor/bundle
           rm -f Gemfile.lock
-          bundle update colored2
-          bundle install
-          bundle exec fastlane --version
+          bundle _2.5.22_ update colored2
+          bundle _2.5.22_ install --jobs 4 --retry 3
+          bundle _2.5.22_ exec fastlane --version
 
       - name: Upload to TestFlight
         id: testflight-upload
@@ -561,7 +561,7 @@ jobs:
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
           IOS_BUNDLE_ID: ${{ inputs.IOS_BUNDLE_ID }}
           APP_NAME: ${{ inputs.APP_NAME }}
-        run: bundle exec fastlane ios upload_to_testflight_lane
+        run: bundle _2.5.22_ exec fastlane ios upload_to_testflight_lane
 
       - name: Set TestFlight upload status
         id: testflight-upload-status
