@@ -324,7 +324,7 @@ FASTFILE
       artifact-id: ${{ steps.upload-ipa.outputs.artifact-id || steps.upload-xcarchive.outputs.artifact-id }}
       store-uploaded: ${{ steps.testflight-upload-status.outputs.uploaded }}
     env:
-      HAS_IOS_SIGNING: 'false'
+      HAS_IOS_SIGNING: ${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 != '' }}
     steps:
       - name: Download workspace artifact
         uses: actions/download-artifact@v4
