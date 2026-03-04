@@ -82,8 +82,21 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install sharp build dependencies (libvips)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libvips-dev
+
+      - name: Configure npm network resilience
+        run: |
+          npm config set fetch-retries 5
+          npm config set fetch-retry-mintimeout 20000
+          npm config set fetch-retry-maxtimeout 120000
+          npm config set fetch-timeout 300000
+
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Generate capacitor.config.ts
         env:
