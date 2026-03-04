@@ -1,6 +1,6 @@
 name: "Build Mobile Apps"
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       APP_NAME:
