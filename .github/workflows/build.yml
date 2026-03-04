@@ -4,65 +4,67 @@ name: "Build Mobile Apps"
   workflow_dispatch:
     inputs:
       APP_NAME:
-        description: 'Display name of the app'
+        description: "Display name of the app"
         required: true
       IOS_BUNDLE_ID:
-        description: 'iOS Bundle Identifier'
+        description: "iOS Bundle Identifier"
         required: true
       ANDROID_PACKAGE_NAME:
-        description: 'Android package name'
+        description: "Android package name"
         required: true
       START_URL:
-        description: 'Web URL to wrap'
+        description: "Web URL to wrap"
         required: true
       ALLOWED_DOMAINS:
-        description: 'Comma-separated allowed domains'
+        description: "Comma-separated allowed domains"
         required: false
-        default: ''
+        default: ""
       NAVIGATION_MODE:
-        description: 'allowlist_only or open_nav'
+        description: "allowlist_only or open_nav"
         required: false
-        default: 'allowlist_only'
+        default: "allowlist_only"
       OPEN_EXTERNAL_IN_BROWSER:
-        description: 'Open external links in system browser'
+        description: "Open external links in system browser"
         required: false
-        default: 'true'
+        default: "true"
       OFFLINE_FALLBACK:
-        description: 'Enable offline fallback page'
+        description: "Enable offline fallback page"
         required: false
-        default: 'true'
+        default: "true"
       STATUS_BAR_STYLE:
-        description: 'default, light, or dark'
+        description: "default, light, or dark"
         required: false
-        default: 'default'
+        default: "default"
       PRIMARY_COLOR:
-        description: 'Primary brand color hex'
+        description: "Primary brand color hex"
         required: false
-        default: '#0061FF'
+        default: "#0061FF"
       APP_VERSION:
-        description: 'Semantic version string'
+        description: "Semantic version string"
         required: true
       IOS_BUILD_NUMBER:
-        description: 'iOS build number'
+        description: "iOS build number"
         required: true
       ANDROID_VERSION_CODE:
-        description: 'Android version code'
+        description: "Android version code"
         required: true
       ICON_ASSET_URL:
-        description: 'URL to download app icon from'
+        description: "URL to download app icon from"
         required: false
+        default: ""
       SPLASH_ASSET_URL:
-        description: 'URL to download splash screen from'
+        description: "URL to download splash screen from"
         required: false
+        default: ""
       RELEASE_TARGET:
-        description: 'none, testflight, play_internal, play_closed, play_production'
+        description: "none, testflight, play_internal, play_closed, play_production"
         required: false
-        default: 'none'
+        default: "none"
       PROJECT_ID:
-        description: 'IPB project UUID'
+        description: "IPB project UUID"
         required: true
       BUILD_JOB_ID:
-        description: 'IPB build job UUID'
+        description: "IPB build job UUID"
         required: true
 
 env:
@@ -113,16 +115,23 @@ jobs:
           APP_VERSION: ${{ inputs.APP_VERSION }}
           IOS_BUILD_NUMBER: ${{ inputs.IOS_BUILD_NUMBER }}
           ANDROID_VERSION_CODE: ${{ inputs.ANDROID_VERSION_CODE }}
-        run: node scripts/generate-config.js
+        run: |
+          if [ -f capacitor.config.ts ]; then
+            echo "capacitor.config.ts already exists (committed by orchestrator), skipping generation"
+            rm -f capacitor.config.ts.template
+          else
+            node scripts/generate-config.js
+          fi
+          rm -f capacitor.config.json
 
       - name: Download icon asset
         if: ${{ inputs.ICON_ASSET_URL != '' }}
         run: |
           mkdir -p assets
-          curl -fSL -o assets/icon.png "${{ inputs.ICON_ASSET_URL }}"
+          curl -fSL --retry 3 --retry-delay 5 -o assets/icon.png "${{ inputs.ICON_ASSET_URL }}"
           FILE_SIZE=$(stat -c%s "assets/icon.png" 2>/dev/null || stat -f%z "assets/icon.png" 2>/dev/null || echo "0")
           if [ "$FILE_SIZE" -lt 100 ]; then
-            echo "::error::Downloaded icon is too small (${FILE_SIZE} bytes) — URL may be invalid."
+            echo "::error::Downloaded icon is too small (${FILE_SIZE} bytes) -- URL may be expired or invalid."
             exit 1
           fi
 
@@ -130,16 +139,16 @@ jobs:
         if: ${{ inputs.SPLASH_ASSET_URL != '' }}
         run: |
           mkdir -p assets
-          curl -fSL -o assets/splash.png "${{ inputs.SPLASH_ASSET_URL }}"
+          curl -fSL --retry 3 --retry-delay 5 -o assets/splash.png "${{ inputs.SPLASH_ASSET_URL }}"
           FILE_SIZE=$(stat -c%s "assets/splash.png" 2>/dev/null || stat -f%z "assets/splash.png" 2>/dev/null || echo "0")
           if [ "$FILE_SIZE" -lt 100 ]; then
-            echo "::error::Downloaded splash is too small (${FILE_SIZE} bytes) — URL may be invalid."
+            echo "::error::Downloaded splash is too small (${FILE_SIZE} bytes) -- URL may be expired or invalid."
             exit 1
           fi
 
       - name: Generate icon and splash resources
         if: ${{ inputs.ICON_ASSET_URL != '' || inputs.SPLASH_ASSET_URL != '' }}
-        run: npx @capacitor/assets generate --iconBackgroundColor '${{ inputs.PRIMARY_COLOR }}' --splashBackgroundColor '${{ inputs.PRIMARY_COLOR }}'
+        run: npx @capacitor/assets generate --iconBackgroundColor "${{ inputs.PRIMARY_COLOR }}" --splashBackgroundColor "${{ inputs.PRIMARY_COLOR }}"
 
       - name: Upload workspace artifact
         uses: actions/upload-artifact@v4
@@ -176,45 +185,47 @@ jobs:
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: 'gradle'
+          distribution: "temurin"
+          java-version: "17"
+          cache: "gradle"
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Add and sync Capacitor Android project
         run: |
-          # If android dir exists but is incomplete (only Fastlane skeleton), fix it
           if [ -d android ] && [ ! -f android/app/build.gradle ]; then
             echo "Incomplete Android project detected, preserving Fastlane files..."
             cp -r android/fastlane /tmp/android-fastlane 2>/dev/null || true
             cp android/Gemfile /tmp/android-Gemfile 2>/dev/null || true
             rm -rf android
           fi
-          # Add android platform if not present
           if [ ! -f android/app/build.gradle ]; then
             npx cap add android
           else
             echo "Android platform already exists, skipping cap add."
           fi
           npx cap sync android
-          # Restore Fastlane files
           cp -r /tmp/android-fastlane android/fastlane 2>/dev/null || true
           cp /tmp/android-Gemfile android/Gemfile 2>/dev/null || true
 
       - name: Set Android version
         working-directory: android
         run: |
-          sed -i "s/versionName \".*\"/versionName \"${{ inputs.APP_VERSION }}\"/" app/build.gradle
-          sed -i "s/versionCode .*/versionCode ${{ inputs.ANDROID_VERSION_CODE }}/" app/build.gradle
-          # Verify substitutions applied
-          if ! grep -q 'versionName "${{ inputs.APP_VERSION }}"' app/build.gradle; then
-            echo "::warning::versionName substitution may not have applied"
+          GRADLE_FILE="app/build.gradle"
+          if [ -f app/build.gradle.kts ]; then
+            GRADLE_FILE="app/build.gradle.kts"
           fi
-          if ! grep -q "versionCode ${{ inputs.ANDROID_VERSION_CODE }}" app/build.gradle; then
-            echo "::warning::versionCode substitution may not have applied"
+          sed -i "s/versionName \"[^\"]*\"/versionName \"${{ inputs.APP_VERSION }}\"/" "$GRADLE_FILE"
+          sed -i "s/versionCode [0-9]*/versionCode ${{ inputs.ANDROID_VERSION_CODE }}/" "$GRADLE_FILE"
+          if ! grep -q "${{ inputs.APP_VERSION }}" "$GRADLE_FILE"; then
+            echo "::warning::versionName substitution may not have applied in $GRADLE_FILE"
           fi
+          if ! grep -q "versionCode ${{ inputs.ANDROID_VERSION_CODE }}" "$GRADLE_FILE" && ! grep -q "versionCode = ${{ inputs.ANDROID_VERSION_CODE }}" "$GRADLE_FILE"; then
+            echo "::warning::versionCode substitution may not have applied in $GRADLE_FILE"
+          fi
+          echo "--- Version info ---"
+          grep -E "version(Name|Code)" "$GRADLE_FILE" || true
 
       - name: Decode Android keystore
         if: env.HAS_KEYSTORE == 'true'
@@ -268,6 +279,8 @@ jobs:
           rm -f Gemfile.lock
           bundle update colored2
           bundle install
+          bundle exec ruby -e "require 'rubygems'; puts \"colored2=#{Gem::Specification.find_by_name('colored2').version}\""
+          bundle exec fastlane --version
 
       - name: Verify Android Fastfile exists
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
@@ -332,30 +345,46 @@ jobs:
       - name: Select Xcode version
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '16'
+          xcode-version: "16"
 
       - name: Install CocoaPods
         run: sudo gem install cocoapods
 
       - name: Add and sync Capacitor iOS project
         run: |
-          # If ios dir exists but is incomplete (only Fastlane skeleton), fix it
           if [ -d ios ] && [ ! -f ios/App/Podfile ]; then
             echo "Incomplete iOS project detected, preserving Fastlane files..."
             cp -r ios/fastlane /tmp/ios-fastlane 2>/dev/null || true
             cp ios/Gemfile /tmp/ios-Gemfile 2>/dev/null || true
             rm -rf ios
           fi
-          # Add iOS platform if not present
           if [ ! -f ios/App/Podfile ]; then
             npx cap add ios
           else
             echo "iOS platform already exists, skipping cap add."
           fi
           npx cap sync ios
-          # Restore Fastlane files
           cp -r /tmp/ios-fastlane ios/fastlane 2>/dev/null || true
           cp /tmp/ios-Gemfile ios/Gemfile 2>/dev/null || true
+
+      - name: Verify iOS Fastfile exists
+        run: |
+          if [ ! -f ios/fastlane/Fastfile ]; then
+            echo "::error::iOS fastlane/Fastfile is missing. It should be synced from the template repo."
+            exit 1
+          fi
+          if [ ! -f ios/fastlane/Appfile ]; then
+            echo 'app_identifier(ENV["IOS_BUNDLE_ID"])' > ios/fastlane/Appfile
+          fi
+          echo "iOS Fastfile verified successfully"
+
+      - name: Verify iOS Gemfile exists
+        run: |
+          if [ ! -f ios/Gemfile ]; then
+            echo "::error::iOS Gemfile is missing. It should be synced from the template repo."
+            exit 1
+          fi
+          echo "iOS Gemfile verified successfully"
 
       - name: Set iOS version
         working-directory: ios/App
@@ -378,19 +407,33 @@ jobs:
           echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
           echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
 
-          # Create and configure temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
 
-          # Import certificate
           security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychains -d user -s $KEYCHAIN_PATH
 
-          # Install provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i $PP_PATH)")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c "Print TeamIdentifier:0" /dev/stdin <<< "$(security cms -D -i $PP_PATH)")
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/${PROFILE_UUID}.mobileprovision
+
+          echo "Provisioning Profile UUID: $PROFILE_UUID"
+          echo "Development Team ID: $TEAM_ID"
+
+          if [ -z "$PROFILE_UUID" ]; then
+            echo "::error::Failed to extract UUID from provisioning profile. The profile may be corrupt or in an unsupported format."
+            exit 1
+          fi
+          if [ -z "$TEAM_ID" ]; then
+            echo "::error::Failed to extract TeamIdentifier from provisioning profile. The profile may be corrupt or missing team info."
+            exit 1
+          fi
+
+          echo "PROFILE_UUID=$PROFILE_UUID" >> $GITHUB_ENV
+          echo "DEVELOPMENT_TEAM=$TEAM_ID" >> $GITHUB_ENV
 
       - name: Build iOS archive (signed)
         if: env.HAS_IOS_SIGNING == 'true'
@@ -402,12 +445,19 @@ jobs:
             -archivePath $RUNNER_TEMP/App.xcarchive \
             -configuration Release \
             -destination 'generic/platform=iOS' \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE="$PROFILE_UUID" \
             -allowProvisioningUpdates
 
       - name: Build iOS archive (unsigned)
         if: env.HAS_IOS_SIGNING != 'true'
         working-directory: ios/App
         run: |
+          echo "::notice::Building unsigned archive (no signing certs configured)"
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development"/CODE_SIGN_IDENTITY = ""/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Distribution"/CODE_SIGN_IDENTITY = ""/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          sed -i '' 's/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
           xcodebuild archive \
             -workspace App.xcworkspace \
             -scheme App \
@@ -416,12 +466,14 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM=""
 
       - name: Export IPA
         if: env.HAS_IOS_SIGNING == 'true'
         run: |
-          cat > $RUNNER_TEMP/ExportOptions.plist << 'PLIST'
+          cat > $RUNNER_TEMP/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -429,7 +481,14 @@ jobs:
             <key>method</key>
             <string>app-store-connect</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${DEVELOPMENT_TEAM}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${{ inputs.IOS_BUNDLE_ID }}</key>
+              <string>${PROFILE_UUID}</string>
+            </dict>
             <key>uploadSymbols</key>
             <true/>
             <key>destination</key>
@@ -444,7 +503,6 @@ jobs:
             -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
             -allowProvisioningUpdates
 
-          # Copy IPA to location Fastlane expects
           mkdir -p ios/build
           cp $RUNNER_TEMP/export/*.ipa ios/build/app.ipa
           echo "IPA exported successfully:"
@@ -474,9 +532,7 @@ jobs:
         run: |
           sudo gem install bundler
           bundle config set --local path 'vendor/bundle'
-          rm -rf vendor/bundle
           rm -f Gemfile.lock
-          bundle update colored2
           bundle install
 
       - name: Upload to TestFlight
@@ -566,7 +622,26 @@ jobs:
 
       - name: Notify CI callback
         run: |
-          # Construct artifact download URLs from artifact IDs
+          RAW_CALLBACK_URL="${CI_CALLBACK_URL}"
+          CALLBACK_URL="$(printf '%s' "$RAW_CALLBACK_URL" | tr -d '\r' | xargs)"
+
+          if [[ -z "$CALLBACK_URL" ]]; then
+            echo "::error::CI_CALLBACK_URL secret is empty."
+            echo "Please ensure worker preflight can inject CI_CALLBACK_URL and IPB_CI_SECRET before dispatch."
+            exit 1
+          fi
+
+          if [[ ! "$CALLBACK_URL" =~ ^https?://[^[:space:]]+$ ]]; then
+            echo "::error::CI_CALLBACK_URL is malformed: '$CALLBACK_URL'"
+            echo "Expected format: https://<your-backend-domain>/functions/v1/ci-callback"
+            exit 1
+          fi
+
+          if [[ -z "${IPB_CI_SECRET}" ]]; then
+            echo "::error::IPB_CI_SECRET secret is empty."
+            exit 1
+          fi
+
           ANDROID_ARTIFACT_ID="${{ needs.build-android.outputs.artifact-id }}"
           IOS_ARTIFACT_ID="${{ needs.build-ios.outputs.artifact-id }}"
           REPO_URL="${{ github.server_url }}/${{ github.repository }}"
@@ -603,7 +678,7 @@ jobs:
             }')
 
           echo "Sending callback to CI..."
-          curl -X POST "${CI_CALLBACK_URL}" \
+          curl -X POST "$CALLBACK_URL" \
             -H "Content-Type: application/json" \
             -H "x-ipb-ci-secret: ${IPB_CI_SECRET}" \
             --retry 3 \
