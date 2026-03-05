@@ -227,6 +227,55 @@ jobs:
           echo "--- Version info ---"
           grep -E "version(Name|Code)" "$GRADLE_FILE" || true
 
+      - name: Android Preflight Check
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
+        run: |
+          echo "==========================================="
+          echo "  ANDROID PREFLIGHT CHECK"
+          echo "==========================================="
+          PASS=0
+          FAIL=0
+
+          check() {
+            local label="$1"
+            local ok="$2"
+            if [ "$ok" = "true" ]; then
+              echo "  OK $label"
+              PASS=$((PASS + 1))
+            else
+              echo "  FAIL $label"
+              FAIL=$((FAIL + 1))
+            fi
+          }
+
+          # Signing secrets
+          [ -n "$ANDROID_KEYSTORE_BASE64" ] && check "ANDROID_KEYSTORE_BASE64 (${#ANDROID_KEYSTORE_BASE64} chars)" "true" || check "ANDROID_KEYSTORE_BASE64" "false"
+          [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && check "ANDROID_KEYSTORE_PASSWORD" "true" || check "ANDROID_KEYSTORE_PASSWORD" "false"
+          [ -n "$ANDROID_KEY_ALIAS" ] && check "ANDROID_KEY_ALIAS ($ANDROID_KEY_ALIAS)" "true" || check "ANDROID_KEY_ALIAS" "false"
+          [ -n "$ANDROID_KEY_PASSWORD" ] && check "ANDROID_KEY_PASSWORD" "true" || check "ANDROID_KEY_PASSWORD" "false"
+
+          # Play Store credentials
+          [ -n "$GOOGLE_PLAY_JSON_KEY" ] && check "GOOGLE_PLAY_JSON_KEY (${#GOOGLE_PLAY_JSON_KEY} chars)" "true" || check "GOOGLE_PLAY_JSON_KEY (optional for store upload)" "false"
+
+          # Files
+          [ -f android/Gemfile ] && check "android/Gemfile" "true" || check "android/Gemfile" "false"
+          [ -f android/fastlane/Fastfile ] && check "android/fastlane/Fastfile" "true" || check "android/fastlane/Fastfile" "false"
+          [ -f android/fastlane/Appfile ] && check "android/fastlane/Appfile" "true" || check "android/fastlane/Appfile" "false"
+
+          echo "==========================================="
+          echo "  Result: $PASS passed, $FAIL failed"
+          echo "==========================================="
+
+          # Only fail if keystore is missing (signing secrets are critical)
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::No Android keystore configured -- building unsigned APK"
+          fi
+
       - name: Decode Android keystore
         if: env.HAS_KEYSTORE == 'true'
         run: echo -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > $RUNNER_TEMP/release.jks
@@ -269,17 +318,40 @@ jobs:
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
 
-      - name: Install Ruby and Fastlane
+      - name: Verify Android Gemfile
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
+        working-directory: android
+        run: |
+          if [ ! -f Gemfile ]; then
+            echo "::warning::Android Gemfile missing -- generating default"
+            cat > Gemfile <<'GEMFILE'
+          source "https://rubygems.org"
+
+          gem "fastlane", "~> 2.225"
+          gem "colored2", "~> 4.0"
+          GEMFILE
+          fi
+          echo "Android Gemfile verified successfully"
+
+      - name: Set up Ruby
+        if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2.2'
+
+      - name: Install Bundler and Android gems
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
         working-directory: android
         run: |
           BUNDLER_VERSION=2.5.22
-          sudo gem install bundler -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
-          rm -rf vendor/bundle
+          export BUNDLE_GEMFILE="$PWD/Gemfile"
+          export BUNDLE_PATH="$PWD/vendor/bundle"
+          gem install bundler -v "$BUNDLER_VERSION" --no-document
+          rm -rf "$BUNDLE_PATH"
           rm -f Gemfile.lock
-          bundle _${BUNDLER_VERSION}_ config set --local path 'vendor/bundle'
-          bundle _${BUNDLER_VERSION}_ update colored2
+          bundle _${BUNDLER_VERSION}_ config set --local path "$BUNDLE_PATH"
           bundle _${BUNDLER_VERSION}_ install --jobs 4 --retry 3
+          bundle _${BUNDLER_VERSION}_ check
           bundle _${BUNDLER_VERSION}_ exec ruby -e "require 'rubygems'; puts \"colored2=#{Gem::Specification.find_by_name('colored2').version}\""
           bundle _${BUNDLER_VERSION}_ exec fastlane --version
 
@@ -308,6 +380,8 @@ jobs:
           TRACK="internal"
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_closed" ]]; then TRACK="alpha"; fi
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
+          export BUNDLE_GEMFILE="$PWD/Gemfile"
+          export BUNDLE_PATH="$PWD/vendor/bundle"
           bundle _2.5.22_ exec fastlane android upload_aab_to_play_store track:$TRACK
 
       - name: Set Play Store upload status
@@ -372,9 +446,10 @@ jobs:
         run: |
           mkdir -p ios/fastlane
           if [ ! -f ios/fastlane/Fastfile ]; then
-            echo "::warning::iOS Fastfile missing — creating inline fallback"
+            echo "::warning::iOS Fastfile missing -- creating inline fallback"
             cat > ios/fastlane/Fastfile <<'FASTFILE'
           default_platform(:ios)
+
           platform :ios do
             desc "Upload to TestFlight"
             lane :upload_to_testflight_lane do
@@ -385,6 +460,7 @@ jobs:
                 is_key_content_base64: true,
                 duration: 1200,
               )
+
               upload_to_testflight(
                 api_key: api_key,
                 ipa: ENV["IPA_PATH"] || "./build/app.ipa",
@@ -400,18 +476,67 @@ jobs:
             echo "app_identifier(ENV[\"IOS_BUNDLE_ID\"])" > ios/fastlane/Appfile
           fi
           echo "iOS Fastfile verified successfully"
+
       - name: Ensure iOS Gemfile exists
         run: |
           if [ ! -f ios/Gemfile ]; then
-            echo "::warning::iOS Gemfile missing — creating inline fallback"
+            echo "::warning::iOS Gemfile missing -- creating inline fallback"
             cat > ios/Gemfile <<'GEMFILE'
           source "https://rubygems.org"
+
           gem "fastlane", "~> 2.225"
           gem "cocoapods", "~> 1.16"
           gem "colored2", "~> 4.0"
           GEMFILE
           fi
           echo "iOS Gemfile verified successfully"
+
+      - name: iOS Preflight Check
+        if: env.HAS_IOS_SIGNING == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "==========================================="
+          echo "  iOS PREFLIGHT CHECK"
+          echo "==========================================="
+          PASS=0
+          FAIL=0
+
+          check() {
+            local label="$1"
+            local ok="$2"
+            if [ "$ok" = "true" ]; then
+              echo "  OK $label"
+              PASS=$((PASS + 1))
+            else
+              echo "  FAIL $label"
+              FAIL=$((FAIL + 1))
+            fi
+          }
+
+          # Secrets
+          [ -n "$ASC_KEY_ID" ] && check "ASC_KEY_ID" "true" || check "ASC_KEY_ID" "false"
+          [ -n "$ASC_ISSUER_ID" ] && check "ASC_ISSUER_ID" "true" || check "ASC_ISSUER_ID" "false"
+          [ -n "$ASC_KEY_CONTENT" ] && check "ASC_KEY_CONTENT (${#ASC_KEY_CONTENT} chars)" "true" || check "ASC_KEY_CONTENT" "false"
+          [ -n "$APPLE_TEAM_ID" ] && check "APPLE_TEAM_ID ($APPLE_TEAM_ID)" "true" || check "APPLE_TEAM_ID" "false"
+
+          # Files
+          [ -f ios/fastlane/Fastfile ] && check "ios/fastlane/Fastfile" "true" || check "ios/fastlane/Fastfile" "false"
+          [ -f ios/Gemfile ] && check "ios/Gemfile" "true" || check "ios/Gemfile" "false"
+          [ -f ios/fastlane/Appfile ] && check "ios/fastlane/Appfile" "true" || check "ios/fastlane/Appfile" "false"
+
+          echo "==========================================="
+          echo "  Result: $PASS passed, $FAIL failed"
+          echo "==========================================="
+
+          if [ "$FAIL" -gt 0 ]; then
+            echo "::error::iOS preflight failed -- $FAIL required item(s) missing. Check the list above."
+            exit 1
+          fi
+
       - name: Set iOS version
         working-directory: ios/App
         run: |
@@ -455,8 +580,9 @@ jobs:
           printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
+          # Validate
           if ! grep -q "BEGIN PRIVATE KEY" "$KEY_FILE"; then
-            echo "::error::Invalid .p8 key — missing PEM header"
+            echo "::error::Invalid .p8 key -- missing PEM header"
             head -1 "$KEY_FILE" | cat -v
             exit 1
           fi
@@ -470,6 +596,22 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          KEY_PATH="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          if [ ! -r "$KEY_PATH" ]; then
+            echo "::error::Auth key not found/readable at $KEY_PATH"
+            ls -la "$HOME/private_keys" || true
+            exit 1
+          fi
+          echo "Using auth key at: $KEY_PATH"
+          ls -la "$KEY_PATH"
+
+          # Patch DEVELOPMENT_TEAM into the Xcode project if APPLE_TEAM_ID is set
+          if [ -n "$APPLE_TEAM_ID" ]; then
+            echo "Setting DEVELOPMENT_TEAM to $APPLE_TEAM_ID in project.pbxproj"
+            sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${APPLE_TEAM_ID}\"/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
+            sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${APPLE_TEAM_ID};/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
+          fi
+
           xcodebuild archive \
             -workspace App.xcworkspace \
             -scheme App \
@@ -479,7 +621,7 @@ jobs:
             CODE_SIGN_STYLE=Automatic \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
-            -authenticationKeyPath $HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyPath "$KEY_PATH" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -allowProvisioningUpdates
@@ -527,11 +669,12 @@ jobs:
           </plist>
           PLIST
 
+          KEY_PATH="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
           xcodebuild -exportArchive \
             -archivePath $RUNNER_TEMP/App.xcarchive \
             -exportPath $RUNNER_TEMP/export \
             -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
-            -authenticationKeyPath $HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyPath "$KEY_PATH" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -allowProvisioningUpdates
@@ -564,12 +707,13 @@ jobs:
         working-directory: ios
         run: |
           BUNDLER_VERSION=2.5.22
-          sudo gem install bundler -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
-          rm -rf vendor/bundle
+          export BUNDLE_GEMFILE="$PWD/Gemfile"
+          export BUNDLE_PATH="$PWD/vendor/bundle"
+          sudo gem install bundler -v "$BUNDLER_VERSION" --no-document
+          rm -rf "$BUNDLE_PATH"
           rm -f Gemfile.lock
-          bundle _${BUNDLER_VERSION}_ config set --local path 'vendor/bundle'
-          bundle _${BUNDLER_VERSION}_ update colored2
-          bundle _${BUNDLER_VERSION}_ install --jobs 4 --retry 3
+          bundle _${BUNDLER_VERSION}_ config set --local path "$BUNDLE_PATH"
+          bundle _${BUNDLER_VERSION}_ check || bundle _${BUNDLER_VERSION}_ install --jobs 4 --retry 3
           bundle _${BUNDLER_VERSION}_ exec fastlane --version
 
       - name: Upload to TestFlight
@@ -582,7 +726,9 @@ jobs:
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
           IOS_BUNDLE_ID: ${{ inputs.IOS_BUNDLE_ID }}
           APP_NAME: ${{ inputs.APP_NAME }}
-        run: bundle _2.5.22_ exec fastlane ios upload_to_testflight_lane
+        run: |
+          BUNDLER_VERSION=2.5.22
+          bundle _${BUNDLER_VERSION}_ exec fastlane ios upload_to_testflight_lane
 
       - name: Set TestFlight upload status
         id: testflight-upload-status
