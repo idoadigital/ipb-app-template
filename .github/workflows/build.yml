@@ -446,10 +446,9 @@ jobs:
         run: |
           mkdir -p ios/fastlane
           if [ ! -f ios/fastlane/Fastfile ]; then
-            echo "::warning::iOS Fastfile missing -- creating inline fallback"
+            echo "::warning::iOS Fastfile missing — creating inline fallback"
             cat > ios/fastlane/Fastfile <<'FASTFILE'
           default_platform(:ios)
-
           platform :ios do
             desc "Upload to TestFlight"
             lane :upload_to_testflight_lane do
@@ -460,7 +459,6 @@ jobs:
                 is_key_content_base64: true,
                 duration: 1200,
               )
-
               upload_to_testflight(
                 api_key: api_key,
                 ipa: ENV["IPA_PATH"] || "./build/app.ipa",
@@ -476,21 +474,18 @@ jobs:
             echo "app_identifier(ENV[\"IOS_BUNDLE_ID\"])" > ios/fastlane/Appfile
           fi
           echo "iOS Fastfile verified successfully"
-
       - name: Ensure iOS Gemfile exists
         run: |
           if [ ! -f ios/Gemfile ]; then
-            echo "::warning::iOS Gemfile missing -- creating inline fallback"
+            echo "::warning::iOS Gemfile missing — creating inline fallback"
             cat > ios/Gemfile <<'GEMFILE'
           source "https://rubygems.org"
-
           gem "fastlane", "~> 2.225"
           gem "cocoapods", "~> 1.16"
           gem "colored2", "~> 4.0"
           GEMFILE
           fi
           echo "iOS Gemfile verified successfully"
-
       - name: iOS Preflight Check
         if: env.HAS_IOS_SIGNING == 'true'
         env:
@@ -580,9 +575,8 @@ jobs:
           printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
-          # Validate
           if ! grep -q "BEGIN PRIVATE KEY" "$KEY_FILE"; then
-            echo "::error::Invalid .p8 key -- missing PEM header"
+            echo "::error::Invalid .p8 key — missing PEM header"
             head -1 "$KEY_FILE" | cat -v
             exit 1
           fi
@@ -709,7 +703,7 @@ jobs:
           BUNDLER_VERSION=2.5.22
           export BUNDLE_GEMFILE="$PWD/Gemfile"
           export BUNDLE_PATH="$PWD/vendor/bundle"
-          sudo gem install bundler -v "$BUNDLER_VERSION" --no-document
+          sudo gem install bundler -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
           rm -rf "$BUNDLE_PATH"
           rm -f Gemfile.lock
           bundle _${BUNDLER_VERSION}_ config set --local path "$BUNDLE_PATH"
