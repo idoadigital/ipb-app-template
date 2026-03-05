@@ -165,7 +165,7 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     outputs:
-      result: ${{ job.status }}
+      build-ok: ${{ steps.android-build-status.outputs.ok }}
       artifact-id: ${{ steps.upload-aab.outputs.artifact-id || steps.upload-apk.outputs.artifact-id }}
       store-uploaded: ${{ steps.play-upload-status.outputs.uploaded }}
     env:
@@ -405,13 +405,23 @@ jobs:
             echo "uploaded=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Set Android build status
+        id: android-build-status
+        if: always()
+        run: |
+          if [[ "${{ steps.upload-aab.outcome }}" == "success" || "${{ steps.upload-apk.outcome }}" == "success" ]]; then
+            echo "ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "ok=false" >> $GITHUB_OUTPUT
+          fi
+
   build-ios:
     needs: setup
     runs-on: macos-15
     timeout-minutes: 45
     continue-on-error: true
     outputs:
-      result: ${{ job.status }}
+      build-ok: ${{ steps.ios-build-status.outputs.ok }}
       artifact-id: ${{ steps.upload-ipa.outputs.artifact-id || steps.upload-xcarchive.outputs.artifact-id }}
       store-uploaded: ${{ steps.testflight-upload-status.outputs.uploaded }}
     env:
@@ -754,7 +764,10 @@ jobs:
               -configuration Release \
               -destination 'generic/platform=iOS'
           else
+            # Use team from provisioning profile if available, otherwise use secret
+            TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
             echo "Building with Automatic signing (API key authentication)"
+            echo "  Team: $TEAM_ID"
             xcodebuild archive \
               -workspace App.xcworkspace \
               -scheme App \
@@ -762,7 +775,7 @@ jobs:
               -configuration Release \
               -destination 'generic/platform=iOS' \
               CODE_SIGN_STYLE=Automatic \
-              DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+              DEVELOPMENT_TEAM="${TEAM_ID}" \
               -authenticationKeyPath "$KEY_PATH" \
               -authenticationKeyID "$ASC_KEY_ID" \
               -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
@@ -894,6 +907,16 @@ jobs:
             echo "uploaded=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Set iOS build status
+        id: ios-build-status
+        if: always()
+        run: |
+          if [[ "${{ steps.upload-ipa.outcome }}" == "success" || "${{ steps.upload-xcarchive.outcome }}" == "success" ]]; then
+            echo "ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "ok=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Clean up keychain
         if: always()
         run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
@@ -907,29 +930,20 @@ jobs:
       - name: Determine build status
         id: status
         run: |
-          ANDROID_RESULT="${{ needs.build-android.result }}"
-          IOS_RESULT="${{ needs.build-ios.result }}"
+          # Use build-ok outputs (not needs.X.result which is masked by continue-on-error)
+          ANDROID_OK="${{ needs.build-android.outputs.build-ok }}"
+          IOS_OK="${{ needs.build-ios.outputs.build-ok }}"
 
-          echo "Android result: $ANDROID_RESULT"
-          echo "iOS result: $IOS_RESULT"
-
-          # Succeed if at least one platform built successfully
-          ANDROID_OK=false
-          IOS_OK=false
-          [[ "$ANDROID_RESULT" == "success" ]] && ANDROID_OK=true
-          [[ "$IOS_RESULT" == "success" ]] && IOS_OK=true
+          echo "Android build-ok: $ANDROID_OK"
+          echo "iOS build-ok: $IOS_OK"
 
           ERRORS=""
-          if [[ "$ANDROID_RESULT" == "failure" ]]; then
+          if [[ "$ANDROID_OK" != "true" ]]; then
             ERRORS="Android build failed."
           fi
-          if [[ "$IOS_RESULT" == "failure" ]]; then
+          if [[ "$IOS_OK" != "true" ]]; then
             if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
             ERRORS="${ERRORS}iOS build failed."
-          fi
-          if [[ "$ANDROID_RESULT" == "cancelled" || "$IOS_RESULT" == "cancelled" ]]; then
-            if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
-            ERRORS="${ERRORS}Build was cancelled."
           fi
 
           if [[ "$ANDROID_OK" == "true" || "$IOS_OK" == "true" ]]; then
@@ -947,8 +961,8 @@ jobs:
         id: release
         run: |
           RELEASE_TARGET="${{ inputs.RELEASE_TARGET }}"
-          ANDROID_RESULT="${{ needs.build-android.result }}"
-          IOS_RESULT="${{ needs.build-ios.result }}"
+          ANDROID_OK="${{ needs.build-android.outputs.build-ok }}"
+          IOS_OK="${{ needs.build-ios.outputs.build-ok }}"
           ANDROID_UPLOADED="${{ needs.build-android.outputs.store-uploaded }}"
           IOS_UPLOADED="${{ needs.build-ios.outputs.store-uploaded }}"
 
@@ -965,9 +979,9 @@ jobs:
             [[ "$RELEASE_TARGET" == "testflight" ]] && IS_IOS_TARGET=true
             [[ "$RELEASE_TARGET" =~ ^play_ ]] && IS_ANDROID_TARGET=true
 
-            if [[ "$IS_IOS_TARGET" == "true" && "$IOS_RESULT" == "failure" ]]; then
+            if [[ "$IS_IOS_TARGET" == "true" && "$IOS_OK" != "true" ]]; then
               echo "status=upload_skipped_build_failed" >> $GITHUB_OUTPUT
-            elif [[ "$IS_ANDROID_TARGET" == "true" && "$ANDROID_RESULT" == "failure" ]]; then
+            elif [[ "$IS_ANDROID_TARGET" == "true" && "$ANDROID_OK" != "true" ]]; then
               echo "status=upload_skipped_build_failed" >> $GITHUB_OUTPUT
             else
               echo "status=upload_skipped" >> $GITHUB_OUTPUT
