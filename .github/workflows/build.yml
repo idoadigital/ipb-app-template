@@ -633,39 +633,35 @@ jobs:
             echo "::warning::Could not extract certificate fingerprint — falling back to automatic signing"
             echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
           else
-            # Extract certificate fingerprints from the provisioning profile
-            # The DeveloperCertificates array contains DER-encoded certs
-            MATCH_FOUND=false
-            CERT_COUNT=$(/usr/libexec/PlistBuddy -c "Print :DeveloperCertificates" "$CMS_XML" 2>/dev/null | grep -c "^    <data>" || echo "0")
+            # Use python3 to reliably extract DER cert fingerprints from the provisioning profile.
+            # PlistBuddy outputs raw binary for <data> elements which corrupts in bash (null bytes).
+            # python3's plistlib handles this correctly.
+            PP_FINGERPRINTS=$(python3 -c "
+import plistlib, hashlib, sys
+with open(sys.argv[1], 'rb') as f:
+    plist = plistlib.load(f)
+certs = plist.get('DeveloperCertificates', [])
+print(f'Found {len(certs)} certificate(s) in profile', file=sys.stderr)
+for i, cert_data in enumerate(certs):
+    fp = hashlib.sha1(cert_data).hexdigest().upper()
+    print(f'  Profile cert {i} SHA-1: {fp}', file=sys.stderr)
+    print(fp)
+" "$CMS_XML" || true)
 
-            # Extract each cert from the profile and compute its SHA-1
-            set +e
-            IDX=0
-            while true; do
-              CERT_DATA=$(/usr/libexec/PlistBuddy -c "Print :DeveloperCertificates:${IDX}" "$CMS_XML" 2>/dev/null)
-              if [ $? -ne 0 ] || [ -z "$CERT_DATA" ]; then
-                break
-              fi
-              # Write the DER cert to a temp file and get its SHA-1
-              echo "$CERT_DATA" | base64 --decode > "$RUNNER_TEMP/pp_cert_${IDX}.der" 2>/dev/null
-              PP_CERT_SHA1=$(openssl x509 -inform DER -in "$RUNNER_TEMP/pp_cert_${IDX}.der" -fingerprint -noout 2>/dev/null | sed 's/.*=//; s/://g')
-              echo "Profile cert $IDX SHA-1: $PP_CERT_SHA1"
-              if [ "$CERT_SHA1" = "$PP_CERT_SHA1" ]; then
-                MATCH_FOUND=true
-                echo "Certificate matches profile cert $IDX"
-                break
-              fi
-              IDX=$((IDX + 1))
-            done
-            set -e
+            echo "Profile certificate fingerprints:"
+            echo "$PP_FINGERPRINTS"
 
-            if [ "$MATCH_FOUND" = "false" ]; then
-              echo "::warning::Certificate does not match provisioning profile — falling back to automatic signing"
-              echo "The P12 certificate and provisioning profile were created with different certificates."
-              echo "Regenerate the provisioning profile with the correct certificate, or use automatic signing."
+            if [ -z "$PP_FINGERPRINTS" ]; then
+              echo "::warning::Could not extract certificates from provisioning profile — falling back to automatic signing"
               echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
-            else
+            elif echo "$PP_FINGERPRINTS" | grep -qF "$CERT_SHA1"; then
               echo "Certificate/profile match verified"
+            else
+              echo "::warning::Certificate does not match provisioning profile — falling back to automatic signing"
+              echo "  P12 cert SHA-1: $CERT_SHA1"
+              echo "  Profile certs:  $PP_FINGERPRINTS"
+              echo "  The P12 certificate and provisioning profile were created with different certificates."
+              echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
             fi
           fi
 
@@ -712,6 +708,9 @@ jobs:
           else
             echo "Configuring Automatic signing in project files..."
             sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' "$PBXPROJ"
+            # Clear any manual provisioning profile reference so Xcode manages it
+            sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' "$PBXPROJ"
+            sed -i '' 's/PROVISIONING_PROFILE = ".*"/PROVISIONING_PROFILE = ""/g' "$PBXPROJ"
             if [ -n "$TEAM_ID" ]; then
               sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
               sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
