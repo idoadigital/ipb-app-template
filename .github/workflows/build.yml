@@ -611,25 +611,67 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ "$SIGNING_MODE" = "manual" ]; then
-            echo "Configuring Manual signing with provisioning profile..."
-            sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          PBXPROJ="App.xcodeproj/project.pbxproj"
+
+          # Detect the available distribution signing identity from the keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          SIGN_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -oE '"(Apple Distribution|iPhone Distribution|iOS Distribution)[^"]*"' | head -1 | tr -d '"')
+          if [ -z "$SIGN_IDENTITY" ]; then
+            SIGN_IDENTITY="Apple Distribution"
+            echo "::warning::Could not detect signing identity, defaulting to: $SIGN_IDENTITY"
           else
-            echo "Configuring Automatic signing with API key..."
-            sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+            echo "Detected signing identity: $SIGN_IDENTITY"
           fi
-          if [ -n "$APPLE_TEAM_ID" ]; then
-            sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${APPLE_TEAM_ID}\"/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
-            sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${APPLE_TEAM_ID};/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
+          echo "SIGN_IDENTITY=$SIGN_IDENTITY" >> $GITHUB_ENV
+
+          # Determine team ID (prefer profile's team, fallback to secret)
+          TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
+          echo "Using team ID: $TEAM_ID"
+
+          if [ "$SIGNING_MODE" = "manual" ]; then
+            echo "Configuring Manual signing in project files..."
+            echo "  Profile: $PP_NAME ($PP_UUID)"
+            echo "  Identity: $SIGN_IDENTITY"
+            echo "  Team: $TEAM_ID"
+
+            # Patch App.xcodeproj — set manual signing for the App target
+            sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' "$PBXPROJ"
+            sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
+            sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
+            sed -i '' "s/CODE_SIGN_IDENTITY = \".*\"/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\"/g" "$PBXPROJ"
+            sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\"/PROVISIONING_PROFILE_SPECIFIER = \"${PP_NAME}\"/g" "$PBXPROJ"
+
+            # If PROVISIONING_PROFILE_SPECIFIER doesn't exist yet, add it after CODE_SIGN_IDENTITY lines
+            if ! grep -q "PROVISIONING_PROFILE_SPECIFIER" "$PBXPROJ"; then
+              sed -i '' "s/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\"/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"${PP_NAME}\"/g" "$PBXPROJ"
+            fi
+          else
+            echo "Configuring Automatic signing in project files..."
+            sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' "$PBXPROJ"
+            if [ -n "$TEAM_ID" ]; then
+              sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
+              sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
+            fi
           fi
-          # Disable signing and provisioning for Pods targets (only main app needs signing)
+
+          # CRITICAL: Disable signing entirely for ALL Pods/framework targets
+          # This prevents "does not support provisioning profiles" errors
           if [ -f Pods/Pods.xcodeproj/project.pbxproj ]; then
-            sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
-            sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development"/CODE_SIGN_IDENTITY = ""/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
-            sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
-            sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
+            echo "Disabling signing for Pods targets..."
+            PODS_PBXPROJ="Pods/Pods.xcodeproj/project.pbxproj"
+            sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' "$PODS_PBXPROJ"
+            sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' "$PODS_PBXPROJ"
+            sed -i '' 's/CODE_SIGN_IDENTITY = ".*"/CODE_SIGN_IDENTITY = ""/g' "$PODS_PBXPROJ"
+            sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' "$PODS_PBXPROJ"
+            sed -i '' 's/PROVISIONING_PROFILE = ".*"/PROVISIONING_PROFILE = ""/g' "$PODS_PBXPROJ"
+            sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' "$PODS_PBXPROJ"
           fi
+
           echo "Signing configured: $SIGNING_MODE"
+
+          # Debug: show key signing settings in project
+          echo "--- App signing settings ---"
+          grep -E "CODE_SIGN_STYLE|DEVELOPMENT_TEAM|CODE_SIGN_IDENTITY|PROVISIONING_PROFILE" "$PBXPROJ" | head -20 || true
 
       - name: Build iOS archive (signed)
         if: env.HAS_IOS_SIGNING == 'true'
@@ -642,31 +684,21 @@ jobs:
           KEY_PATH="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 
           if [ "$SIGNING_MODE" = "manual" ]; then
-            # Use team from provisioning profile if available, otherwise use secret
-            TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
-            echo "Building with Manual signing (profile: $PP_NAME, team: $TEAM_ID)"
+            echo "Building with Manual signing (all config set in project files)"
+            echo "  Profile: $PP_NAME"
+            echo "  Identity: $SIGN_IDENTITY"
+            echo "  Team: ${PP_TEAM:-$APPLE_TEAM_ID}"
 
-            # Detect the available distribution signing identity
-            KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-            SIGN_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -oE '"(Apple Distribution|iPhone Distribution|iOS Distribution)[^"]*"' | head -1 | tr -d '"')
-            if [ -z "$SIGN_IDENTITY" ]; then
-              SIGN_IDENTITY="Apple Distribution"
-              echo "::warning::Could not detect signing identity, defaulting to: $SIGN_IDENTITY"
-            else
-              echo "Detected signing identity: $SIGN_IDENTITY"
-            fi
-
+            # DO NOT pass any signing flags on the command line!
+            # All signing is configured in the .xcodeproj files.
+            # Passing PROVISIONING_PROFILE or CODE_SIGN_IDENTITY here
+            # would apply them globally to ALL targets including Pods.
             xcodebuild archive \
               -workspace App.xcworkspace \
               -scheme App \
               -archivePath $RUNNER_TEMP/App.xcarchive \
               -configuration Release \
-              -destination 'generic/platform=iOS' \
-              CODE_SIGN_STYLE=Manual \
-              "CODE_SIGN_IDENTITY=$SIGN_IDENTITY" \
-              DEVELOPMENT_TEAM="${TEAM_ID}" \
-              "PROVISIONING_PROFILE_SPECIFIER=${PP_NAME}" \
-              'PROVISIONING_PROFILE[sdk=iphoneos*]'="${PP_UUID}"
+              -destination 'generic/platform=iOS'
           else
             echo "Building with Automatic signing (API key authentication)"
             xcodebuild archive \
