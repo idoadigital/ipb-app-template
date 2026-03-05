@@ -1,6 +1,6 @@
 name: "Build Mobile Apps"
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       APP_NAME:
@@ -544,6 +544,8 @@ jobs:
             exit 1
           fi
           echo "ASC key validated: $(wc -c < "$KEY_FILE") bytes"
+
+
 
 
 
