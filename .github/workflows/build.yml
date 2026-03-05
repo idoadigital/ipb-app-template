@@ -609,6 +609,56 @@ jobs:
           fi
           echo "ASC key validated: $(wc -c < "$KEY_FILE") bytes"
 
+      - name: Verify certificate matches provisioning profile
+        if: env.HAS_IOS_SIGNING == 'true' && env.SIGNING_MODE == 'manual'
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          CMS_XML=$RUNNER_TEMP/pp_cms.plist
+
+          # Get SHA-1 fingerprint of the imported signing certificate
+          CERT_SHA1=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -oE '[A-F0-9]{40}' | head -1)
+          echo "Certificate SHA-1: $CERT_SHA1"
+
+          if [ -z "$CERT_SHA1" ]; then
+            echo "::warning::Could not extract certificate fingerprint — falling back to automatic signing"
+            echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
+          else
+            # Extract certificate fingerprints from the provisioning profile
+            # The DeveloperCertificates array contains DER-encoded certs
+            MATCH_FOUND=false
+            CERT_COUNT=$(/usr/libexec/PlistBuddy -c "Print :DeveloperCertificates" "$CMS_XML" 2>/dev/null | grep -c "^    <data>" || echo "0")
+
+            # Extract each cert from the profile and compute its SHA-1
+            set +e
+            IDX=0
+            while true; do
+              CERT_DATA=$(/usr/libexec/PlistBuddy -c "Print :DeveloperCertificates:${IDX}" "$CMS_XML" 2>/dev/null)
+              if [ $? -ne 0 ] || [ -z "$CERT_DATA" ]; then
+                break
+              fi
+              # Write the DER cert to a temp file and get its SHA-1
+              echo "$CERT_DATA" | base64 --decode > "$RUNNER_TEMP/pp_cert_${IDX}.der" 2>/dev/null
+              PP_CERT_SHA1=$(openssl x509 -inform DER -in "$RUNNER_TEMP/pp_cert_${IDX}.der" -fingerprint -noout 2>/dev/null | sed 's/.*=//; s/://g')
+              echo "Profile cert $IDX SHA-1: $PP_CERT_SHA1"
+              if [ "$CERT_SHA1" = "$PP_CERT_SHA1" ]; then
+                MATCH_FOUND=true
+                echo "Certificate matches profile cert $IDX"
+                break
+              fi
+              IDX=$((IDX + 1))
+            done
+            set -e
+
+            if [ "$MATCH_FOUND" = "false" ]; then
+              echo "::warning::Certificate does not match provisioning profile — falling back to automatic signing"
+              echo "The P12 certificate and provisioning profile were created with different certificates."
+              echo "Regenerate the provisioning profile with the correct certificate, or use automatic signing."
+              echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
+            else
+              echo "Certificate/profile match verified"
+            fi
+          fi
+
       - name: Configure code signing
         if: env.HAS_IOS_SIGNING == 'true'
         working-directory: ios/App
