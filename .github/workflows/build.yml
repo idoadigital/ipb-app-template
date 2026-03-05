@@ -696,19 +696,27 @@ jobs:
           path: ${{ runner.temp }}/App.xcarchive
           retention-days: 30
 
-      - name: Install Ruby and Fastlane
+      - name: Set up Ruby
         if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
-        working-directory: ios
-        run: |
-          BUNDLER_VERSION=2.5.22
-          export BUNDLE_GEMFILE="$PWD/Gemfile"
-          export BUNDLE_PATH="$PWD/vendor/bundle"
-          sudo gem install bundler -v "2.5.22" --no-document -v "$BUNDLER_VERSION" --no-document
-          rm -rf "$BUNDLE_PATH"
-          rm -f Gemfile.lock
-          bundle _${BUNDLER_VERSION}_ config set --local path "$BUNDLE_PATH"
-          bundle _${BUNDLER_VERSION}_ check || bundle _${BUNDLER_VERSION}_ install --jobs 4 --retry 3
-          bundle _${BUNDLER_VERSION}_ exec fastlane --version
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2.2'
+
+        - name: Install Bundler and iOS gems
+          if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
+          working-directory: ios
+          run: |
+            BUNDLER_VERSION=2.5.22
+            export BUNDLE_GEMFILE="$PWD/Gemfile"
+            export BUNDLE_PATH="$PWD/vendor/bundle"
+            gem install bundler -v "$BUNDLER_VERSION" --no-document
+            rm -rf "$BUNDLE_PATH"
+            rm -f Gemfile.lock
+            bundle _${BUNDLER_VERSION}_ config set --local path "$BUNDLE_PATH"
+            bundle _${BUNDLER_VERSION}_ install --jobs 4 --retry 3
+            bundle _${BUNDLER_VERSION}_ check
+            bundle _${BUNDLER_VERSION}_ exec ruby -e "require 'rubygems'; puts \"colored2=#{Gem::Specification.find_by_name('colored2').version}\""
+            bundle _${BUNDLER_VERSION}_ exec fastlane --version
 
       - name: Upload to TestFlight
         id: testflight-upload
