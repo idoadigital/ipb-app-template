@@ -209,6 +209,28 @@ jobs:
           cp -r /tmp/android-fastlane android/fastlane 2>/dev/null || true
           cp /tmp/android-Gemfile android/Gemfile 2>/dev/null || true
 
+      - name: Set Android SDK to API 35
+        working-directory: android
+        run: |
+          GRADLE_FILE="app/build.gradle"
+          if [ -f app/build.gradle.kts ]; then
+            GRADLE_FILE="app/build.gradle.kts"
+          fi
+          # Update variables.gradle if Capacitor uses it
+          if [ -f variables.gradle ]; then
+            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/" variables.gradle
+            sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/" variables.gradle
+            echo "--- variables.gradle ---"
+            cat variables.gradle
+          fi
+          # Patch app/build.gradle directly (handles both Groovy and Kotlin DSL patterns)
+          sed -i "s/compileSdk .*/compileSdk 35/" "$GRADLE_FILE"
+          sed -i "s/compileSdkVersion .*/compileSdkVersion 35/" "$GRADLE_FILE"
+          sed -i "s/targetSdk .*/targetSdk 35/" "$GRADLE_FILE"
+          sed -i "s/targetSdkVersion .*/targetSdkVersion 35/" "$GRADLE_FILE"
+          echo "--- SDK versions in $GRADLE_FILE ---"
+          grep -E "compileSdk|targetSdk" "$GRADLE_FILE" || true
+
       - name: Set Android version
         working-directory: android
         run: |
