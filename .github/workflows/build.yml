@@ -552,27 +552,22 @@ jobs:
           PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
           SIGNING_MODE="automatic"
+          PP_UUID=""
           if [ -n "$PROVISIONING_PROFILE_BASE64" ]; then
             PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
-            if echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PP_PATH" 2>/dev/null; then
-              FILE_SIZE=$(stat -f%z "$PP_PATH" 2>/dev/null || stat -c%s "$PP_PATH" 2>/dev/null || echo "0")
-              if [ "$FILE_SIZE" -gt 100 ] && security cms -D -i "$PP_PATH" > /dev/null 2>&1; then
-                PP_UUID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin)
-                PP_NAME=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin 2>/dev/null || echo "unknown")
-                echo "Provisioning Profile: $PP_NAME (UUID: $PP_UUID)"
-                mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-                cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${PP_UUID}.mobileprovision"
-                echo "PP_UUID=$PP_UUID" >> $GITHUB_ENV
-                SIGNING_MODE="manual"
-                echo "Provisioning profile installed successfully"
-              else
-                echo "::warning::Provisioning profile is invalid or too small (${FILE_SIZE} bytes)"
-              fi
-            else
-              echo "::warning::Failed to base64-decode provisioning profile"
-            fi
+            set +e
+            echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PP_PATH" 2>/dev/null
+            PP_UUID=$(security cms -D -i "$PP_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin 2>/dev/null)
+            set -e
+          fi
+          if [ -n "$PP_UUID" ]; then
+            mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+            cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${PP_UUID}.mobileprovision"
+            echo "PP_UUID=$PP_UUID" >> $GITHUB_ENV
+            SIGNING_MODE="manual"
+            echo "Provisioning profile installed: $PP_UUID"
           else
-            echo "::warning::IOS_PROVISIONING_PROFILE_BASE64 is empty"
+            echo "::warning::No valid provisioning profile — using automatic signing with API key"
           fi
           echo "SIGNING_MODE=$SIGNING_MODE" >> $GITHUB_ENV
           echo "Using signing mode: $SIGNING_MODE"
