@@ -897,6 +897,8 @@ jobs:
         id: release
         run: |
           RELEASE_TARGET="${{ inputs.RELEASE_TARGET }}"
+          ANDROID_RESULT="${{ needs.build-android.result }}"
+          IOS_RESULT="${{ needs.build-ios.result }}"
           ANDROID_UPLOADED="${{ needs.build-android.outputs.store-uploaded }}"
           IOS_UPLOADED="${{ needs.build-ios.outputs.store-uploaded }}"
 
@@ -907,7 +909,19 @@ jobs:
             echo "status=uploaded_to_store" >> $GITHUB_OUTPUT
             echo "track=$RELEASE_TARGET" >> $GITHUB_OUTPUT
           else
-            echo "status=upload_skipped" >> $GITHUB_OUTPUT
+            # Determine WHY the upload was skipped
+            IS_IOS_TARGET=false
+            IS_ANDROID_TARGET=false
+            [[ "$RELEASE_TARGET" == "testflight" ]] && IS_IOS_TARGET=true
+            [[ "$RELEASE_TARGET" =~ ^play_ ]] && IS_ANDROID_TARGET=true
+
+            if [[ "$IS_IOS_TARGET" == "true" && "$IOS_RESULT" == "failure" ]]; then
+              echo "status=upload_skipped_build_failed" >> $GITHUB_OUTPUT
+            elif [[ "$IS_ANDROID_TARGET" == "true" && "$ANDROID_RESULT" == "failure" ]]; then
+              echo "status=upload_skipped_build_failed" >> $GITHUB_OUTPUT
+            else
+              echo "status=upload_skipped" >> $GITHUB_OUTPUT
+            fi
             echo "track=$RELEASE_TARGET" >> $GITHUB_OUTPUT
           fi
 
