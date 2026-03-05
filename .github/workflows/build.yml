@@ -235,9 +235,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
         run: |
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
           echo "  ANDROID PREFLIGHT CHECK"
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
           PASS=0
           FAIL=0
 
@@ -245,10 +245,10 @@ jobs:
             local label="$1"
             local ok="$2"
             if [ "$ok" = "true" ]; then
-              echo "  OK $label"
+              echo "  ✅ $label"
               PASS=$((PASS + 1))
             else
-              echo "  FAIL $label"
+              echo "  ❌ $label"
               FAIL=$((FAIL + 1))
             fi
           }
@@ -267,13 +267,13 @@ jobs:
           [ -f android/fastlane/Fastfile ] && check "android/fastlane/Fastfile" "true" || check "android/fastlane/Fastfile" "false"
           [ -f android/fastlane/Appfile ] && check "android/fastlane/Appfile" "true" || check "android/fastlane/Appfile" "false"
 
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
           echo "  Result: $PASS passed, $FAIL failed"
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
 
           # Only fail if keystore is missing (signing secrets are critical)
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::warning::No Android keystore configured -- building unsigned APK"
+            echo "::warning::No Android keystore configured — building unsigned APK"
           fi
 
       - name: Decode Android keystore
@@ -323,7 +323,7 @@ jobs:
         working-directory: android
         run: |
           if [ ! -f Gemfile ]; then
-            echo "::warning::Android Gemfile missing -- generating default"
+            echo "::warning::Android Gemfile missing — generating default via base64"
             echo 'c291cmNlICJodHRwczovL3J1YnlnZW1zLm9yZyIKCmdlbSAiZmFzdGxhbmUiLCAifj4gMi4yMjUiCmdlbSAiY29sb3JlZDIiLCAifj4gMy4xIgo=' | base64 --decode > Gemfile
           fi
           echo "Android Gemfile verified successfully"
@@ -332,7 +332,7 @@ jobs:
         if: ${{ contains(fromJSON('["play_internal", "play_closed", "play_production"]'), inputs.RELEASE_TARGET) && env.HAS_KEYSTORE == 'true' }}
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.2.2'
+          ruby-version: '3.3'
           bundler-cache: true
           working-directory: android
 
@@ -369,8 +369,6 @@ jobs:
           TRACK="internal"
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_closed" ]]; then TRACK="alpha"; fi
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
-          export BUNDLE_GEMFILE="$PWD/Gemfile"
-          export BUNDLE_PATH="$PWD/vendor/bundle"
           bundle exec fastlane android upload_aab_to_play_store track:$TRACK
 
       - name: Set Play Store upload status
@@ -409,7 +407,7 @@ jobs:
       - name: Select Xcode version
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16"
+          xcode-version: "16.4"
 
       - name: Install CocoaPods
         run: sudo gem install cocoapods
@@ -435,20 +433,22 @@ jobs:
         run: |
           mkdir -p ios/fastlane
           if [ ! -f ios/fastlane/Fastfile ]; then
-            echo "::warning::iOS Fastfile missing — creating inline fallback"
+            echo "::warning::iOS Fastfile missing — creating via base64"
             echo 'ZGVmYXVsdF9wbGF0Zm9ybSg6aW9zKQoKcGxhdGZvcm0gOmlvcyBkbwogIGRlc2MgIlVwbG9hZCB0byBUZXN0RmxpZ2h0IgogIGxhbmUgOnVwbG9hZF90b190ZXN0ZmxpZ2h0X2xhbmUgZG8KICAgIGFwaV9rZXkgPSBhcHBfc3RvcmVfY29ubmVjdF9hcGlfa2V5KAogICAgICBrZXlfaWQ6IEVOVlsiQVNDX0tFWV9JRCJdLAogICAgICBpc3N1ZXJfaWQ6IEVOVlsiQVNDX0lTU1VFUl9JRCJdLAogICAgICBrZXlfY29udGVudDogRU5WWyJBU0NfS0VZX0NPTlRFTlQiXSwKICAgICAgaXNfa2V5X2NvbnRlbnRfYmFzZTY0OiB0cnVlLAogICAgICBkdXJhdGlvbjogMTIwMCwKICAgICkKCiAgICB1cGxvYWRfdG9fdGVzdGZsaWdodCgKICAgICAgYXBpX2tleTogYXBpX2tleSwKICAgICAgaXBhOiBFTlZbIklQQV9QQVRIIl0gfHwgIi4vYnVpbGQvYXBwLmlwYSIsCiAgICAgIHNraXBfd2FpdGluZ19mb3JfYnVpbGRfcHJvY2Vzc2luZzogdHJ1ZSwKICAgICAgc2tpcF9zdWJtaXNzaW9uOiBmYWxzZSwKICAgICAgZGlzdHJpYnV0ZV9leHRlcm5hbDogZmFsc2UsCiAgICApCiAgZW5kCmVuZAo=' | base64 --decode > ios/fastlane/Fastfile
           fi
           if [ ! -f ios/fastlane/Appfile ]; then
-            echo "app_identifier(ENV[\"IOS_BUNDLE_ID\"])" > ios/fastlane/Appfile
+            echo 'app_identifier(ENV["IOS_BUNDLE_ID"])' > ios/fastlane/Appfile
           fi
           echo "iOS Fastfile verified successfully"
+
       - name: Ensure iOS Gemfile exists
         run: |
           if [ ! -f ios/Gemfile ]; then
-            echo "::warning::iOS Gemfile missing — creating inline fallback"
+            echo "::warning::iOS Gemfile missing — creating via base64"
             echo 'c291cmNlICJodHRwczovL3J1YnlnZW1zLm9yZyIKCmdlbSAiZmFzdGxhbmUiLCAifj4gMi4yMjUiCmdlbSAiY29jb2Fwb2RzIiwgIn4+IDEuMTYiCmdlbSAiY29sb3JlZDIiLCAifj4gMy4xIgo=' | base64 --decode > ios/Gemfile
           fi
           echo "iOS Gemfile verified successfully"
+
       - name: iOS Preflight Check
         if: env.HAS_IOS_SIGNING == 'true'
         env:
@@ -457,9 +457,9 @@ jobs:
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
           echo "  iOS PREFLIGHT CHECK"
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
           PASS=0
           FAIL=0
 
@@ -467,10 +467,10 @@ jobs:
             local label="$1"
             local ok="$2"
             if [ "$ok" = "true" ]; then
-              echo "  OK $label"
+              echo "  ✅ $label"
               PASS=$((PASS + 1))
             else
-              echo "  FAIL $label"
+              echo "  ❌ $label"
               FAIL=$((FAIL + 1))
             fi
           }
@@ -486,12 +486,12 @@ jobs:
           [ -f ios/Gemfile ] && check "ios/Gemfile" "true" || check "ios/Gemfile" "false"
           [ -f ios/fastlane/Appfile ] && check "ios/fastlane/Appfile" "true" || check "ios/fastlane/Appfile" "false"
 
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
           echo "  Result: $PASS passed, $FAIL failed"
-          echo "==========================================="
+          echo "═══════════════════════════════════════"
 
           if [ "$FAIL" -gt 0 ]; then
-            echo "::error::iOS preflight failed -- $FAIL required item(s) missing. Check the list above."
+            echo "::error::iOS preflight failed — $FAIL required item(s) missing. Check the list above."
             exit 1
           fi
 
@@ -538,12 +538,40 @@ jobs:
           printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
+          # Validate
           if ! grep -q "BEGIN PRIVATE KEY" "$KEY_FILE"; then
             echo "::error::Invalid .p8 key — missing PEM header"
             head -1 "$KEY_FILE" | cat -v
             exit 1
           fi
           echo "ASC key validated: $(wc -c < "$KEY_FILE") bytes"
+
+      - name: Force Automatic Signing for all targets
+        if: env.HAS_IOS_SIGNING == 'true'
+        working-directory: ios/App
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "Patching all targets to Automatic signing..."
+          # Force CODE_SIGN_STYLE = Automatic everywhere
+          sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          # Remove any hardcoded provisioning profile specifiers
+          sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          # Set DEVELOPMENT_TEAM for all targets
+          if [ -n "$APPLE_TEAM_ID" ]; then
+            sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${APPLE_TEAM_ID}\"/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
+            sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${APPLE_TEAM_ID};/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
+          fi
+          # Do the same for any Pods project
+          if [ -f Pods/Pods.xcodeproj/project.pbxproj ]; then
+            sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
+            sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
+            if [ -n "$APPLE_TEAM_ID" ]; then
+              sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${APPLE_TEAM_ID}\"/g" Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
+              sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${APPLE_TEAM_ID};/g" Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
+            fi
+          fi
+          echo "All targets patched for Automatic signing"
 
       - name: Build iOS archive (signed)
         if: env.HAS_IOS_SIGNING == 'true'
@@ -560,14 +588,6 @@ jobs:
             exit 1
           fi
           echo "Using auth key at: $KEY_PATH"
-          ls -la "$KEY_PATH"
-
-          # Patch DEVELOPMENT_TEAM into the Xcode project if APPLE_TEAM_ID is set
-          if [ -n "$APPLE_TEAM_ID" ]; then
-            echo "Setting DEVELOPMENT_TEAM to $APPLE_TEAM_ID in project.pbxproj"
-            sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${APPLE_TEAM_ID}\"/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
-            sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${APPLE_TEAM_ID};/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
-          fi
 
           xcodebuild archive \
             -workspace App.xcworkspace \
@@ -647,17 +667,17 @@ jobs:
         if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.2.2'
+          ruby-version: '3.3'
           bundler-cache: true
-        working-directory: ios
+          working-directory: ios
 
       - name: Verify iOS gems
-          if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
-          working-directory: ios
-          run: |
-            bundle check
-            bundle exec ruby -e "require 'rubygems'; puts \"colored2=#{Gem::Specification.find_by_name('colored2').version}\""
-            bundle exec fastlane --version
+        if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
+        working-directory: ios
+        run: |
+          bundle check
+          bundle exec ruby -e "require 'rubygems'; puts \"colored2=#{Gem::Specification.find_by_name('colored2').version}\""
+          bundle exec fastlane --version
 
       - name: Upload to TestFlight
         id: testflight-upload
@@ -670,8 +690,7 @@ jobs:
           IOS_BUNDLE_ID: ${{ inputs.IOS_BUNDLE_ID }}
           APP_NAME: ${{ inputs.APP_NAME }}
         run: |
-          BUNDLER_VERSION=2.5.22
-          bundle _${BUNDLER_VERSION}_ exec fastlane ios upload_to_testflight_lane
+          bundle exec fastlane ios upload_to_testflight_lane
 
       - name: Set TestFlight upload status
         id: testflight-upload-status
