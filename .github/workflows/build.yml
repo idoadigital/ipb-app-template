@@ -637,16 +637,16 @@ jobs:
             # PlistBuddy outputs raw binary for <data> elements which corrupts in bash (null bytes).
             # python3's plistlib handles this correctly.
             PP_FINGERPRINTS=$(python3 -c "
-import plistlib, hashlib, sys
-with open(sys.argv[1], 'rb') as f:
-    plist = plistlib.load(f)
-certs = plist.get('DeveloperCertificates', [])
-print(f'Found {len(certs)} certificate(s) in profile', file=sys.stderr)
-for i, cert_data in enumerate(certs):
-    fp = hashlib.sha1(cert_data).hexdigest().upper()
-    print(f'  Profile cert {i} SHA-1: {fp}', file=sys.stderr)
-    print(fp)
-" "$CMS_XML" || true)
+          import plistlib, hashlib, sys
+          with open(sys.argv[1], 'rb') as f:
+              plist = plistlib.load(f)
+          certs = plist.get('DeveloperCertificates', [])
+          print(f'Found {len(certs)} certificate(s) in profile', file=sys.stderr)
+          for i, cert_data in enumerate(certs):
+              fp = hashlib.sha1(cert_data).hexdigest().upper()
+              print(f'  Profile cert {i} SHA-1: {fp}', file=sys.stderr)
+              print(fp)
+          " "$CMS_XML" || true)
 
             echo "Profile certificate fingerprints:"
             echo "$PP_FINGERPRINTS"
