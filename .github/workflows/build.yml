@@ -382,7 +382,7 @@ jobs:
           if [[ "${{ inputs.RELEASE_TARGET }}" == "play_production" ]]; then TRACK="production"; fi
           export BUNDLE_GEMFILE="$PWD/Gemfile"
           export BUNDLE_PATH="$PWD/vendor/bundle"
-          bundle _2.5.22_ exec fastlane android upload_aab_to_play_store track:$TRACK
+          bundle exec fastlane android upload_aab_to_play_store track:$TRACK
 
       - name: Set Play Store upload status
         id: play-upload-status
