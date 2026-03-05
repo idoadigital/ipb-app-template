@@ -529,20 +529,27 @@ jobs:
         env:
           PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
-          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
-          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
-
-          # Extract UUID from the provisioning profile
-          PP_UUID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin)
-          PP_NAME=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin)
-          echo "Provisioning Profile: $PP_NAME (UUID: $PP_UUID)"
-
-          # Install profile where Xcode can find it
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${PP_UUID}.mobileprovision"
-
-          echo "PP_UUID=$PP_UUID" >> $GITHUB_ENV
-          echo "Provisioning profile installed successfully"
+          if [ -z "$PROVISIONING_PROFILE_BASE64" ]; then
+            echo "::warning::IOS_PROVISIONING_PROFILE_BASE64 is empty — will use automatic signing with API key"
+            echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
+          else
+            PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+            echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+            FILE_SIZE=$(stat -f%z "$PP_PATH" 2>/dev/null || echo "0")
+            if [ "$FILE_SIZE" -lt 100 ]; then
+              echo "::warning::Provisioning profile is too small (${FILE_SIZE} bytes) — will use automatic signing"
+              echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
+            else
+              PP_UUID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin)
+              PP_NAME=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin)
+              echo "Provisioning Profile: $PP_NAME (UUID: $PP_UUID)"
+              mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+              cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${PP_UUID}.mobileprovision"
+              echo "PP_UUID=$PP_UUID" >> $GITHUB_ENV
+              echo "SIGNING_MODE=manual" >> $GITHUB_ENV
+              echo "Provisioning profile installed successfully"
+            fi
+          fi
 
       - name: Create App Store Connect API key file
         if: env.HAS_IOS_SIGNING == 'true'
@@ -558,7 +565,6 @@ jobs:
           printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
-          # Validate
           if ! grep -q "BEGIN PRIVATE KEY" "$KEY_FILE"; then
             echo "::error::Invalid .p8 key — missing PEM header"
             head -1 "$KEY_FILE" | cat -v
@@ -566,14 +572,19 @@ jobs:
           fi
           echo "ASC key validated: $(wc -c < "$KEY_FILE") bytes"
 
-      - name: Configure manual code signing
+      - name: Configure code signing
         if: env.HAS_IOS_SIGNING == 'true'
         working-directory: ios/App
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          echo "Patching project for Manual signing..."
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          if [ "$SIGNING_MODE" = "manual" ]; then
+            echo "Configuring Manual signing with provisioning profile..."
+            sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          else
+            echo "Configuring Automatic signing with API key..."
+            sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' App.xcodeproj/project.pbxproj 2>/dev/null || true
+          fi
           if [ -n "$APPLE_TEAM_ID" ]; then
             sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${APPLE_TEAM_ID}\"/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
             sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${APPLE_TEAM_ID};/g" App.xcodeproj/project.pbxproj 2>/dev/null || true
@@ -583,24 +594,45 @@ jobs:
             sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
             sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development"/CODE_SIGN_IDENTITY = ""/g' Pods/Pods.xcodeproj/project.pbxproj 2>/dev/null || true
           fi
-          echo "Project configured for Manual signing"
+          echo "Signing configured: $SIGNING_MODE"
 
       - name: Build iOS archive (signed)
         if: env.HAS_IOS_SIGNING == 'true'
         working-directory: ios/App
         env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcodebuild archive \
-            -workspace App.xcworkspace \
-            -scheme App \
-            -archivePath $RUNNER_TEMP/App.xcarchive \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
-            PROVISIONING_PROFILE="${PP_UUID}"
+          KEY_PATH="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+          if [ "$SIGNING_MODE" = "manual" ]; then
+            echo "Building with Manual signing (provisioning profile: $PP_UUID)"
+            xcodebuild archive \
+              -workspace App.xcworkspace \
+              -scheme App \
+              -archivePath $RUNNER_TEMP/App.xcarchive \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGN_STYLE=Manual \
+              CODE_SIGN_IDENTITY="Apple Distribution" \
+              DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+              PROVISIONING_PROFILE="${PP_UUID}"
+          else
+            echo "Building with Automatic signing (API key authentication)"
+            xcodebuild archive \
+              -workspace App.xcworkspace \
+              -scheme App \
+              -archivePath $RUNNER_TEMP/App.xcarchive \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGN_STYLE=Automatic \
+              DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+              -authenticationKeyPath "$KEY_PATH" \
+              -authenticationKeyID "$ASC_KEY_ID" \
+              -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              -allowProvisioningUpdates
+          fi
 
       - name: Build iOS archive (unsigned)
         if: env.HAS_IOS_SIGNING != 'true'
@@ -625,25 +657,44 @@ jobs:
       - name: Export IPA
         if: env.HAS_IOS_SIGNING == 'true'
         env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IOS_BUNDLE_ID: ${{ inputs.IOS_BUNDLE_ID }}
         run: |
-          # Build ExportOptions.plist dynamically for manual signing
           PLIST=$RUNNER_TEMP/ExportOptions.plist
           /usr/libexec/PlistBuddy -c "Add :method string app-store-connect" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :teamID string ${APPLE_TEAM_ID}" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:${IOS_BUNDLE_ID} string ${PP_UUID}" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :uploadSymbols bool true" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :destination string export" "$PLIST"
+
+          if [ "$SIGNING_MODE" = "manual" ]; then
+            /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :teamID string ${APPLE_TEAM_ID}" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:${IOS_BUNDLE_ID} string ${PP_UUID}" "$PLIST"
+          else
+            /usr/libexec/PlistBuddy -c "Add :signingStyle string automatic" "$PLIST"
+          fi
+
           echo "ExportOptions.plist:"
           cat "$PLIST"
 
-          xcodebuild -exportArchive \
-            -archivePath $RUNNER_TEMP/App.xcarchive \
-            -exportPath $RUNNER_TEMP/export \
-            -exportOptionsPlist "$PLIST"
+          KEY_PATH="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          if [ "$SIGNING_MODE" = "manual" ]; then
+            xcodebuild -exportArchive \
+              -archivePath $RUNNER_TEMP/App.xcarchive \
+              -exportPath $RUNNER_TEMP/export \
+              -exportOptionsPlist "$PLIST"
+          else
+            xcodebuild -exportArchive \
+              -archivePath $RUNNER_TEMP/App.xcarchive \
+              -exportPath $RUNNER_TEMP/export \
+              -exportOptionsPlist "$PLIST" \
+              -authenticationKeyPath "$KEY_PATH" \
+              -authenticationKeyID "$ASC_KEY_ID" \
+              -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              -allowProvisioningUpdates
+          fi
 
           mkdir -p ios/build
           cp $RUNNER_TEMP/export/*.ipa ios/build/app.ipa
