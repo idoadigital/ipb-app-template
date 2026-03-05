@@ -636,17 +636,18 @@ jobs:
             # Use python3 to reliably extract DER cert fingerprints from the provisioning profile.
             # PlistBuddy outputs raw binary for <data> elements which corrupts in bash (null bytes).
             # python3's plistlib handles this correctly.
-            PP_FINGERPRINTS=$(python3 -c "
+            cat > "$RUNNER_TEMP/extract_certs.py" << 'PYEOF'
           import plistlib, hashlib, sys
-          with open(sys.argv[1], 'rb') as f:
+          with open(sys.argv[1], "rb") as f:
               plist = plistlib.load(f)
-          certs = plist.get('DeveloperCertificates', [])
-          print(f'Found {len(certs)} certificate(s) in profile', file=sys.stderr)
+          certs = plist.get("DeveloperCertificates", [])
+          sys.stderr.write("Found %d certificate(s) in profile\n" % len(certs))
           for i, cert_data in enumerate(certs):
               fp = hashlib.sha1(cert_data).hexdigest().upper()
-              print(f'  Profile cert {i} SHA-1: {fp}', file=sys.stderr)
+              sys.stderr.write("  Profile cert %d SHA-1: %s\n" % (i, fp))
               print(fp)
-          " "$CMS_XML" || true)
+          PYEOF
+            PP_FINGERPRINTS=$(python3 "$RUNNER_TEMP/extract_certs.py" "$CMS_XML" || true)
 
             echo "Profile certificate fingerprints:"
             echo "$PP_FINGERPRINTS"
