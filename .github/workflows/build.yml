@@ -555,10 +555,15 @@ jobs:
           PP_UUID=""
           if [ -n "$PROVISIONING_PROFILE_BASE64" ]; then
             PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+            CMS_XML=$RUNNER_TEMP/pp_cms.plist
             set +e
             echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PP_PATH" 2>/dev/null
-            PP_UUID=$(security cms -D -i "$PP_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin 2>/dev/null)
+            security cms -D -i "$PP_PATH" > "$CMS_XML" 2>/dev/null
+            CMS_OK=$?
             set -e
+            if [ "$CMS_OK" -eq 0 ] && [ -s "$CMS_XML" ]; then
+              PP_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$CMS_XML" 2>/dev/null || true)
+            fi
           fi
           if [ -n "$PP_UUID" ]; then
             mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
