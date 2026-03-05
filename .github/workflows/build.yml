@@ -712,6 +712,8 @@ jobs:
             # Clear any manual provisioning profile reference so Xcode manages it
             sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' "$PBXPROJ"
             sed -i '' 's/PROVISIONING_PROFILE = ".*"/PROVISIONING_PROFILE = ""/g' "$PBXPROJ"
+            # Set distribution identity so Xcode looks for distribution profiles (not development)
+            sed -i '' 's/CODE_SIGN_IDENTITY = ".*"/CODE_SIGN_IDENTITY = "Apple Distribution"/g' "$PBXPROJ"
             if [ -n "$TEAM_ID" ]; then
               sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
               sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
@@ -775,6 +777,7 @@ jobs:
               -configuration Release \
               -destination 'generic/platform=iOS' \
               CODE_SIGN_STYLE=Automatic \
+              CODE_SIGN_IDENTITY="Apple Distribution" \
               DEVELOPMENT_TEAM="${TEAM_ID}" \
               -authenticationKeyPath "$KEY_PATH" \
               -authenticationKeyID "$ASC_KEY_ID" \
