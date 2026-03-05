@@ -163,7 +163,9 @@ jobs:
     needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    continue-on-error: true
     outputs:
+      result: ${{ job.status }}
       artifact-id: ${{ steps.upload-aab.outputs.artifact-id || steps.upload-apk.outputs.artifact-id }}
       store-uploaded: ${{ steps.play-upload-status.outputs.uploaded }}
     env:
@@ -407,7 +409,9 @@ jobs:
     needs: setup
     runs-on: macos-15
     timeout-minutes: 45
+    continue-on-error: true
     outputs:
+      result: ${{ job.status }}
       artifact-id: ${{ steps.upload-ipa.outputs.artifact-id || steps.upload-xcarchive.outputs.artifact-id }}
       store-uploaded: ${{ steps.testflight-upload-status.outputs.uploaded }}
     env:
@@ -856,29 +860,33 @@ jobs:
           ANDROID_RESULT="${{ needs.build-android.result }}"
           IOS_RESULT="${{ needs.build-ios.result }}"
 
-          if [[ "$ANDROID_RESULT" == "success" && "$IOS_RESULT" == "success" ]]; then
+          echo "Android result: $ANDROID_RESULT"
+          echo "iOS result: $IOS_RESULT"
+
+          # Succeed if at least one platform built successfully
+          ANDROID_OK=false
+          IOS_OK=false
+          [[ "$ANDROID_RESULT" == "success" ]] && ANDROID_OK=true
+          [[ "$IOS_RESULT" == "success" ]] && IOS_OK=true
+
+          ERRORS=""
+          if [[ "$ANDROID_RESULT" == "failure" ]]; then
+            ERRORS="Android build failed."
+          fi
+          if [[ "$IOS_RESULT" == "failure" ]]; then
+            if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
+            ERRORS="${ERRORS}iOS build failed."
+          fi
+          if [[ "$ANDROID_RESULT" == "cancelled" || "$IOS_RESULT" == "cancelled" ]]; then
+            if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
+            ERRORS="${ERRORS}Build was cancelled."
+          fi
+
+          if [[ "$ANDROID_OK" == "true" || "$IOS_OK" == "true" ]]; then
             echo "result=succeeded" >> $GITHUB_OUTPUT
-            echo "error_message=" >> $GITHUB_OUTPUT
-          elif [[ "$ANDROID_RESULT" == "skipped" && "$IOS_RESULT" == "success" ]]; then
-            echo "result=succeeded" >> $GITHUB_OUTPUT
-            echo "error_message=" >> $GITHUB_OUTPUT
-          elif [[ "$ANDROID_RESULT" == "success" && "$IOS_RESULT" == "skipped" ]]; then
-            echo "result=succeeded" >> $GITHUB_OUTPUT
-            echo "error_message=" >> $GITHUB_OUTPUT
+            echo "error_message=${ERRORS}" >> $GITHUB_OUTPUT
           else
             echo "result=failed" >> $GITHUB_OUTPUT
-            ERRORS=""
-            if [[ "$ANDROID_RESULT" == "failure" ]]; then
-              ERRORS="Android build failed."
-            fi
-            if [[ "$IOS_RESULT" == "failure" ]]; then
-              if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
-              ERRORS="${ERRORS}iOS build failed."
-            fi
-            if [[ "$ANDROID_RESULT" == "cancelled" || "$IOS_RESULT" == "cancelled" ]]; then
-              if [[ -n "$ERRORS" ]]; then ERRORS="$ERRORS "; fi
-              ERRORS="${ERRORS}Build was cancelled."
-            fi
             if [[ -z "$ERRORS" ]]; then
               ERRORS="Build failed. Check workflow logs for details."
             fi
