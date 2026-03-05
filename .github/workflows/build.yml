@@ -545,12 +545,6 @@ jobs:
           fi
           echo "ASC key validated: $(wc -c < "$KEY_FILE") bytes"
 
-
-
-
-
-
-
       - name: Build iOS archive (signed)
         if: env.HAS_IOS_SIGNING == 'true'
         working-directory: ios/App
