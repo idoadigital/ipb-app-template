@@ -649,9 +649,9 @@ jobs:
         with:
           ruby-version: '3.2.2'
           bundler-cache: true
-          working-directory: ios
+        working-directory: ios
 
-        - name: Verify iOS gems
+      - name: Verify iOS gems
           if: ${{ inputs.RELEASE_TARGET == 'testflight' && env.HAS_IOS_SIGNING == 'true' }}
           working-directory: ios
           run: |
