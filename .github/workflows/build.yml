@@ -707,13 +707,13 @@ jobs:
               sed -i '' "s/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\"/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"${PP_NAME}\"/g" "$PBXPROJ"
             fi
           else
-            echo "Configuring Automatic signing in project files..."
-            sed -i '' 's/CODE_SIGN_STYLE = Manual/CODE_SIGN_STYLE = Automatic/g' "$PBXPROJ"
-            # Clear any manual provisioning profile reference so Xcode manages it
+            # Cert/profile mismatch fallback: archive WITHOUT signing,
+            # then let the export step re-sign with distribution via ASC API.
+            echo "Configuring unsigned archive (signing deferred to export step)..."
+            sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' "$PBXPROJ"
+            sed -i '' 's/CODE_SIGN_IDENTITY = ".*"/CODE_SIGN_IDENTITY = ""/g' "$PBXPROJ"
             sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' "$PBXPROJ"
             sed -i '' 's/PROVISIONING_PROFILE = ".*"/PROVISIONING_PROFILE = ""/g' "$PBXPROJ"
-            # Set distribution identity so Xcode looks for distribution profiles (not development)
-            sed -i '' 's/CODE_SIGN_IDENTITY = ".*"/CODE_SIGN_IDENTITY = "Apple Distribution"/g' "$PBXPROJ"
             if [ -n "$TEAM_ID" ]; then
               sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
               sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
@@ -766,22 +766,19 @@ jobs:
               -configuration Release \
               -destination 'generic/platform=iOS'
           else
-            # Use team from provisioning profile if available, otherwise use secret
-            TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
-            echo "Building with Automatic signing (API key authentication)"
-            echo "  Team: $TEAM_ID"
+            # Archive without signing — the export step will handle distribution signing
+            # via the ASC API key with -allowProvisioningUpdates
+            echo "Building unsigned archive (signing deferred to export step)"
             xcodebuild archive \
               -workspace App.xcworkspace \
               -scheme App \
               -archivePath $RUNNER_TEMP/App.xcarchive \
               -configuration Release \
               -destination 'generic/platform=iOS' \
-              CODE_SIGN_STYLE=Automatic \
-              DEVELOPMENT_TEAM="${TEAM_ID}" \
-              -authenticationKeyPath "$KEY_PATH" \
-              -authenticationKeyID "$ASC_KEY_ID" \
-              -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-              -allowProvisioningUpdates
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGN_ENTITLEMENTS=""
           fi
 
       - name: Build iOS archive (unsigned)
@@ -824,7 +821,9 @@ jobs:
             /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
             /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:${IOS_BUNDLE_ID} string ${PP_NAME}" "$PLIST"
           else
+            TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
             /usr/libexec/PlistBuddy -c "Add :signingStyle string automatic" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :teamID string ${TEAM_ID}" "$PLIST"
           fi
 
           echo "ExportOptions.plist:"
