@@ -630,8 +630,9 @@ jobs:
           echo "Certificate SHA-1: $CERT_SHA1"
 
           if [ -z "$CERT_SHA1" ]; then
-            echo "::warning::Could not extract certificate fingerprint — falling back to automatic signing"
-            echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
+            echo "::error::Could not extract certificate fingerprint from P12. The P12 file may be corrupted."
+            echo "::error::Please re-upload your iOS Distribution Certificate (.p12) in Settings → Signing & Credentials."
+            exit 1
           else
             # Use python3 to reliably extract DER cert fingerprints from the provisioning profile.
             # PlistBuddy outputs raw binary for <data> elements which corrupts in bash (null bytes).
@@ -653,16 +654,26 @@ jobs:
             echo "$PP_FINGERPRINTS"
 
             if [ -z "$PP_FINGERPRINTS" ]; then
-              echo "::warning::Could not extract certificates from provisioning profile — falling back to automatic signing"
-              echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
+              echo "::error::Could not extract certificates from provisioning profile. The profile may be corrupted."
+              echo "::error::Please re-upload your provisioning profile in Settings → Signing & Credentials."
+              exit 1
             elif echo "$PP_FINGERPRINTS" | grep -qF "$CERT_SHA1"; then
               echo "Certificate/profile match verified"
             else
-              echo "::warning::Certificate does not match provisioning profile — falling back to automatic signing"
-              echo "  P12 cert SHA-1: $CERT_SHA1"
-              echo "  Profile certs:  $PP_FINGERPRINTS"
-              echo "  The P12 certificate and provisioning profile were created with different certificates."
-              echo "SIGNING_MODE=automatic" >> $GITHUB_ENV
+              echo "::error::P12 certificate does NOT match the provisioning profile."
+              echo "::error::"
+              echo "::error::  P12 cert SHA-1:     $CERT_SHA1"
+              echo "::error::  Profile cert SHA-1:  $PP_FINGERPRINTS"
+              echo "::error::"
+              echo "::error::Your .p12 certificate and provisioning profile were created with different certificates."
+              echo "::error::To fix this:"
+              echo "::error::  1. Go to Settings → Signing & Credentials"
+              echo "::error::  2. Upload a new provisioning profile that was created with the SAME certificate as your P12"
+              echo "::error::  3. Or upload a new P12 + profile pair that match each other"
+              echo "::error::"
+              echo "::error::You can regenerate the provisioning profile from the Apple Developer Portal using the same"
+              echo "::error::distribution certificate that your P12 was exported from."
+              exit 1
             fi
           fi
 
@@ -689,35 +700,23 @@ jobs:
           TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
           echo "Using team ID: $TEAM_ID"
 
-          if [ "$SIGNING_MODE" = "manual" ]; then
-            echo "Configuring Manual signing in project files..."
-            echo "  Profile: $PP_NAME ($PP_UUID)"
-            echo "  Identity: $SIGN_IDENTITY"
-            echo "  Team: $TEAM_ID"
+          # SIGNING_MODE is always 'manual' here — the verify step fails the build
+          # if cert/profile don't match, so we never reach this point with a mismatch.
+          echo "Configuring Manual signing in project files..."
+          echo "  Profile: $PP_NAME ($PP_UUID)"
+          echo "  Identity: $SIGN_IDENTITY"
+          echo "  Team: $TEAM_ID"
 
-            # Patch App.xcodeproj — set manual signing for the App target
-            sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' "$PBXPROJ"
-            sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
-            sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
-            sed -i '' "s/CODE_SIGN_IDENTITY = \".*\"/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\"/g" "$PBXPROJ"
-            sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\"/PROVISIONING_PROFILE_SPECIFIER = \"${PP_NAME}\"/g" "$PBXPROJ"
+          # Patch App.xcodeproj — set manual signing for the App target
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' "$PBXPROJ"
+          sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
+          sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
+          sed -i '' "s/CODE_SIGN_IDENTITY = \".*\"/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\"/g" "$PBXPROJ"
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\"/PROVISIONING_PROFILE_SPECIFIER = \"${PP_NAME}\"/g" "$PBXPROJ"
 
-            # If PROVISIONING_PROFILE_SPECIFIER doesn't exist yet, add it after CODE_SIGN_IDENTITY lines
-            if ! grep -q "PROVISIONING_PROFILE_SPECIFIER" "$PBXPROJ"; then
-              sed -i '' "s/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\"/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"${PP_NAME}\"/g" "$PBXPROJ"
-            fi
-          else
-            # Cert/profile mismatch fallback: archive WITHOUT signing,
-            # then let the export step re-sign with distribution via ASC API.
-            echo "Configuring unsigned archive (signing deferred to export step)..."
-            sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' "$PBXPROJ"
-            sed -i '' 's/CODE_SIGN_IDENTITY = ".*"/CODE_SIGN_IDENTITY = ""/g' "$PBXPROJ"
-            sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = ".*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' "$PBXPROJ"
-            sed -i '' 's/PROVISIONING_PROFILE = ".*"/PROVISIONING_PROFILE = ""/g' "$PBXPROJ"
-            if [ -n "$TEAM_ID" ]; then
-              sed -i '' "s/DEVELOPMENT_TEAM = \"\"/DEVELOPMENT_TEAM = \"${TEAM_ID}\"/g" "$PBXPROJ"
-              sed -i '' "s/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = ${TEAM_ID};/g" "$PBXPROJ"
-            fi
+          # If PROVISIONING_PROFILE_SPECIFIER doesn't exist yet, add it after CODE_SIGN_IDENTITY lines
+          if ! grep -q "PROVISIONING_PROFILE_SPECIFIER" "$PBXPROJ"; then
+            sed -i '' "s/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\"/CODE_SIGN_IDENTITY = \"${SIGN_IDENTITY}\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"${PP_NAME}\"/g" "$PBXPROJ"
           fi
 
           # CRITICAL: Disable signing entirely for ALL Pods/framework targets
@@ -747,39 +746,21 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          KEY_PATH="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          echo "Building with Manual signing (all config set in project files)"
+          echo "  Profile: $PP_NAME"
+          echo "  Identity: $SIGN_IDENTITY"
+          echo "  Team: ${PP_TEAM:-$APPLE_TEAM_ID}"
 
-          if [ "$SIGNING_MODE" = "manual" ]; then
-            echo "Building with Manual signing (all config set in project files)"
-            echo "  Profile: $PP_NAME"
-            echo "  Identity: $SIGN_IDENTITY"
-            echo "  Team: ${PP_TEAM:-$APPLE_TEAM_ID}"
-
-            # DO NOT pass any signing flags on the command line!
-            # All signing is configured in the .xcodeproj files.
-            # Passing PROVISIONING_PROFILE or CODE_SIGN_IDENTITY here
-            # would apply them globally to ALL targets including Pods.
-            xcodebuild archive \
-              -workspace App.xcworkspace \
-              -scheme App \
-              -archivePath $RUNNER_TEMP/App.xcarchive \
-              -configuration Release \
-              -destination 'generic/platform=iOS'
-          else
-            # Archive without signing — the export step will handle distribution signing
-            # via the ASC API key with -allowProvisioningUpdates
-            echo "Building unsigned archive (signing deferred to export step)"
-            xcodebuild archive \
-              -workspace App.xcworkspace \
-              -scheme App \
-              -archivePath $RUNNER_TEMP/App.xcarchive \
-              -configuration Release \
-              -destination 'generic/platform=iOS' \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGN_IDENTITY="" \
-              CODE_SIGN_ENTITLEMENTS=""
-          fi
+          # DO NOT pass any signing flags on the command line!
+          # All signing is configured in the .xcodeproj files.
+          # Passing PROVISIONING_PROFILE or CODE_SIGN_IDENTITY here
+          # would apply them globally to ALL targets including Pods.
+          xcodebuild archive \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -configuration Release \
+            -destination 'generic/platform=iOS'
 
       - name: Build iOS archive (unsigned)
         if: env.HAS_IOS_SIGNING != 'true'
@@ -814,37 +795,19 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :uploadSymbols bool true" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :destination string export" "$PLIST"
 
-          if [ "$SIGNING_MODE" = "manual" ]; then
-            TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
-            /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :teamID string ${TEAM_ID}" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:${IOS_BUNDLE_ID} string ${PP_NAME}" "$PLIST"
-          else
-            TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
-            /usr/libexec/PlistBuddy -c "Add :signingStyle string automatic" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :teamID string ${TEAM_ID}" "$PLIST"
-          fi
+          TEAM_ID="${PP_TEAM:-$APPLE_TEAM_ID}"
+          /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :teamID string ${TEAM_ID}" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:${IOS_BUNDLE_ID} string ${PP_NAME}" "$PLIST"
 
           echo "ExportOptions.plist:"
           cat "$PLIST"
 
-          KEY_PATH="$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          if [ "$SIGNING_MODE" = "manual" ]; then
-            xcodebuild -exportArchive \
-              -archivePath $RUNNER_TEMP/App.xcarchive \
-              -exportPath $RUNNER_TEMP/export \
-              -exportOptionsPlist "$PLIST"
-          else
-            xcodebuild -exportArchive \
-              -archivePath $RUNNER_TEMP/App.xcarchive \
-              -exportPath $RUNNER_TEMP/export \
-              -exportOptionsPlist "$PLIST" \
-              -authenticationKeyPath "$KEY_PATH" \
-              -authenticationKeyID "$ASC_KEY_ID" \
-              -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-              -allowProvisioningUpdates
-          fi
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -exportPath $RUNNER_TEMP/export \
+            -exportOptionsPlist "$PLIST"
 
           mkdir -p ios/build
           cp $RUNNER_TEMP/export/*.ipa ios/build/app.ipa
