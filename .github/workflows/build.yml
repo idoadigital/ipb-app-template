@@ -565,7 +565,6 @@ jobs:
         env:
           PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
-          SIGNING_MODE="automatic"
           PP_UUID=""
           if [ -n "$PROVISIONING_PROFILE_BASE64" ]; then
             PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
@@ -590,13 +589,15 @@ jobs:
               echo "PP_TEAM=$PP_TEAM" >> $GITHUB_ENV
               echo "Using team from provisioning profile: $PP_TEAM"
             fi
-            SIGNING_MODE="manual"
+            echo "SIGNING_MODE=manual" >> $GITHUB_ENV
             echo "Provisioning profile installed: $PP_UUID ($PP_NAME)"
           else
-            echo "::warning::No valid provisioning profile — using automatic signing with API key"
+            # The rest of the signing pipeline requires a manual profile; failing
+            # here gives a clear message instead of a cryptic export error later.
+            echo "::error::A signing certificate is configured but no valid provisioning profile was provided."
+            echo "::error::Open the app in the dashboard and click 'Regenerate iOS Signing' to create a matching certificate + profile, then rebuild."
+            exit 1
           fi
-          echo "SIGNING_MODE=$SIGNING_MODE" >> $GITHUB_ENV
-          echo "Using signing mode: $SIGNING_MODE"
 
       - name: Create App Store Connect API key file
         if: env.HAS_IOS_SIGNING == 'true'
@@ -666,13 +667,8 @@ jobs:
               echo "::error::  Profile cert SHA-1:  $PP_FINGERPRINTS"
               echo "::error::"
               echo "::error::Your .p12 certificate and provisioning profile were created with different certificates."
-              echo "::error::To fix this:"
-              echo "::error::  1. Go to Settings → Signing & Credentials"
-              echo "::error::  2. Upload a new provisioning profile that was created with the SAME certificate as your P12"
-              echo "::error::  3. Or upload a new P12 + profile pair that match each other"
-              echo "::error::"
-              echo "::error::You can regenerate the provisioning profile from the Apple Developer Portal using the same"
-              echo "::error::distribution certificate that your P12 was exported from."
+              echo "::error::To fix this: open the app in the dashboard and click 'Regenerate iOS Signing'."
+              echo "::error::That generates a fresh certificate + matching profile automatically, then trigger a new build."
               exit 1
             fi
           fi
